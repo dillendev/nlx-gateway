@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package nlx.management;
+
+// Based on:
+// https://gitlab.com/commonground/nlx/nlx/-/blob/master/management-api/api/management.proto
+
+// For some reason the `Service` prefix is dropped in Go
+service Management {
+  // As the `Inway` is the only field of the `RegisterInwayRequest` message, for
+  // some reason it's skipped entirely
+  rpc RegisterInway(Inway) returns (Inway) {}
+}
+
+message Inway {
+  message Service { string name = 1; }
+
+  string name = 1;
+  string version = 2;
+  string hostname = 3;
+  string self_address = 4;
+  repeated Service services = 5;
+  string ip_address = 6;
+}
+
+message RegisterInwayRequest { Inway inway = 1; }
+
+message RegisterInwayResponse { Inway inway = 1; }
