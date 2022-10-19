@@ -10,6 +10,8 @@ service Management {
   // As the `Inway` is the only field of the `RegisterInwayRequest` message, for
   // some reason it's skipped entirely
   rpc RegisterInway(Inway) returns (Inway) {}
+
+  rpc GetInwayConfig(GetInwayConfigRequest) returns (GetInwayConfigResponse) {}
 }
 
 message Inway {
@@ -26,3 +28,38 @@ message Inway {
 message RegisterInwayRequest { Inway inway = 1; }
 
 message RegisterInwayResponse { Inway inway = 1; }
+
+message GetInwayConfigRequest { string name = 1; }
+
+message GetInwayConfigResponse {
+  repeated Service services = 1;
+  bool is_organization_inway = 2;
+
+  message Service {
+    string name = 1;
+    string endpoint_url = 2;
+    string documentation_url = 3;
+    string api_specification_url = 4;
+    bool internal = 5;
+    string tech_support_contact = 6;
+    string public_support_contact = 7;
+    AuthorizationSettings authorization_settings = 8;
+    int32 one_time_costs = 9;
+    int32 monthly_costs = 10;
+    int32 request_costs = 11;
+
+    message AuthorizationSettings {
+      message Authorization {
+        message Organization {
+          string serial_number = 1;
+          string name = 2;
+        }
+
+        Organization organization = 1;
+        string public_key_hash = 2;
+        string public_key_pem = 3;
+      }
+      repeated Authorization authorizations = 1;
+    }
+  }
+}

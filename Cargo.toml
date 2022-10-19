@@ -9,12 +9,13 @@ edition = "2021"
 anyhow = "1.0.65"
 clap = { version = "4.0.17", features = ["derive", "env"] }
 hostname = "0.3.1"
-hyper = { version = "0.14.20", features = ["full"] }
 log = "0.4.17"
 pretty_env_logger = "0.4.0"
 prost = "0.11.0"
 tokio = { version = "1.21.2", features = ["full"] }
 tonic = { version = "0.8.2", features = ["tls"] }
+rocket = { version = "0.5.0-rc.2", features = ["json"]}
+serde = { version = "1.0.145", features = ["derive"] }
 
 [build-dependencies]
 #prost-build = { version = "0.11.1" }
