@@ -4,85 +4,29 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
-use tokio::{
-    select,
-    sync::mpsc::{channel, Receiver, Sender},
-    time,
-};
-use tonic::transport::{Channel, ClientTlsConfig};
+use anyhow::Result;
+use tokio::{select, sync::mpsc::Sender, task::JoinHandle, time};
+use tonic::transport::Channel;
 
-use crate::pb::{self, management_client::ManagementClient, GetInwayConfigRequest, Inway};
+use crate::pb::{self, management_client::ManagementClient, GetInwayConfigRequest};
 
 use super::{Event, InwayConfig, Service};
 
-fn get_hostname() -> Result<String> {
-    hostname::get()
-        .map_err(|e| anyhow::anyhow!("failed to get hostname: {}", e))
-        .and_then(|h| {
-            h.into_string()
-                .map_err(|_| anyhow::anyhow!("hostname is not valid utf-8"))
-        })
-}
-
 pub struct ConfigPoller {
     inway_name: String,
-    inway_addr: String,
-    management_api_addr: String,
-    tls_config: ClientTlsConfig,
+    management: ManagementClient<Channel>,
 }
 
 impl ConfigPoller {
-    pub fn new(
-        inway_name: String,
-        inway_addr: String,
-        management_api_addr: String,
-        tls_config: ClientTlsConfig,
-    ) -> Self {
+    pub fn new(management: ManagementClient<Channel>, inway_name: String) -> Self {
         ConfigPoller {
+            management,
             inway_name,
-            inway_addr,
-            management_api_addr,
-            tls_config,
         }
     }
 
-    fn get_inway(&self) -> Result<Inway> {
-        Ok(Inway {
-            name: self.inway_name.clone(),
-            version: "0.0.1".to_string(),
-            hostname: get_hostname()?,
-            self_address: self.inway_addr.to_string(),
-            services: vec![],
-            ip_address: "".to_string(),
-        })
-    }
-
-    async fn connect_management_api(&self) -> Result<ManagementClient<Channel>> {
-        let channel = Channel::from_shared(self.management_api_addr.clone())?
-            .tls_config(self.tls_config.clone())
-            .with_context(|| "failed to setup TLS config")?
-            .connect()
-            .await
-            .with_context(|| "failed to connect")?;
-
-        Ok(ManagementClient::new(channel))
-    }
-
     // @TODO: autorestart on failure
-    pub async fn poll(self, tx: Sender<Event>) -> Result<()> {
-        log::debug!(
-            "connecting to management API at: {}",
-            self.management_api_addr
-        );
-
-        let mut client = self.connect_management_api().await?;
-
-        // register the inway
-        client.register_inway(self.get_inway()?).await?;
-
-        tx.send(Event::InwayRegistered).await?;
-
+    pub async fn poll(mut self, tx: Sender<Event>) -> Result<()> {
         let mut interval = time::interval(Duration::from_secs(10));
         let mut old_hash = None;
 
@@ -91,7 +35,7 @@ impl ConfigPoller {
                 _ = interval.tick() => {
                     log::trace!("retrieving config from management API");
 
-                    let response = client
+                    let response = self.management
                         .get_inway_config(GetInwayConfigRequest {
                             name: self.inway_name.clone(),
                         })
@@ -119,18 +63,14 @@ impl ConfigPoller {
         Ok(())
     }
 
-    pub fn poll_start(self) -> Result<Receiver<Event>> {
+    pub fn poll_start(self, tx: Sender<Event>) -> Result<JoinHandle<()>> {
         log::info!("start polling for config changes");
 
-        let (tx, rx) = channel(10);
-
-        tokio::spawn(async move {
+        Ok(tokio::spawn(async move {
             if let Err(e) = self.poll(tx).await {
                 log::error!("error polling config: {:#?}", e);
             }
-        });
-
-        Ok(rx)
+        }))
     }
 }
 

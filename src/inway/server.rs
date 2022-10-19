@@ -1,8 +1,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use rocket::routes;
+use rocket::{
+    config::{MutualTls, TlsConfig},
+    routes,
+};
 use tokio::sync::{mpsc::Receiver, RwLock};
+
+use crate::tls::TlsPair;
 
 use super::{config, Event};
 
@@ -11,7 +16,6 @@ type InwayConfig = Arc<RwLock<config::InwayConfig>>;
 async fn handle_events(config: InwayConfig, mut rx: Receiver<Event>) {
     while let Some(event) = rx.recv().await {
         match event {
-            Event::InwayRegistered => log::info!("inway registered"),
             Event::ConfigUpdated(new_config) => {
                 let mut lock = config.write().await;
                 *lock = new_config;
@@ -23,18 +27,25 @@ async fn handle_events(config: InwayConfig, mut rx: Receiver<Event>) {
 }
 
 pub struct Server {
+    tls_pair: TlsPair,
     rx: Receiver<Event>,
 }
 
 impl Server {
-    pub fn new(rx: Receiver<Event>) -> Self {
-        Self { rx }
+    pub fn new(tls_pair: TlsPair, rx: Receiver<Event>) -> Self {
+        Self { tls_pair, rx }
     }
 
     pub async fn run(self, addr: SocketAddr) -> Result<()> {
+        let certs_bundle = self.tls_pair.bundle();
         let figment = rocket::Config::figment()
             .merge(("address", addr.ip()))
-            .merge(("port", addr.port()));
+            .merge(("port", addr.port()))
+            .merge((
+                "tls",
+                TlsConfig::from_bytes(&certs_bundle, &self.tls_pair.key_pem)
+                    .with_mutual(MutualTls::from_bytes(&certs_bundle).mandatory(true)),
+            ));
 
         let config = InwayConfig::default();
 
