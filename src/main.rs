@@ -1,10 +1,13 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use pb::management_client::ManagementClient;
-use tokio::sync::mpsc::channel;
+use pb::{
+    directory::directory_client::DirectoryClient, management::management_client::ManagementClient,
+};
+use tls::TlsPair;
+use tokio::sync::broadcast::channel;
 use tonic::transport::{Channel, ClientTlsConfig};
 
 use crate::inway::{Broadcast, ConfigPoller, Server};
@@ -13,7 +16,13 @@ mod inway;
 mod tls;
 
 pub mod pb {
-    tonic::include_proto!("nlx.management");
+    pub mod management {
+        tonic::include_proto!("nlx.management");
+    }
+
+    pub mod directory {
+        tonic::include_proto!("directoryapi");
+    }
 }
 
 #[derive(ValueEnum, Clone)]
@@ -56,6 +65,9 @@ struct Opts {
 
     #[clap(long, env = "SELF_ADDRESS")]
     self_address: String,
+
+    #[clap(long, env = "DIRECTORY_ADDRESS")]
+    directory_address: String,
 }
 
 #[tokio::main]
@@ -66,20 +78,26 @@ async fn main() -> Result<()> {
     let internal_tls_config =
         tls::client_config(opts.tls_root_cert, opts.tls_cert, opts.tls_key).await?;
     let org_tls_pair =
-        tls::read_pair(opts.tls_nlx_root_cert, opts.tls_org_cert, opts.tls_org_key).await?;
-
-    let management =
-        ManagementClient::new(connect(opts.management_api_address, internal_tls_config).await?);
+        TlsPair::from_files(opts.tls_nlx_root_cert, opts.tls_org_cert, opts.tls_org_key).await?;
 
     match opts.mode {
         Mode::Inway => {
+            let directory = DirectoryClient::new(
+                connect(opts.directory_address, org_tls_pair.client_config()).await?,
+            );
+            let management = ManagementClient::new(
+                connect(opts.management_api_address, internal_tls_config.clone()).await?,
+            );
+
             let (tx, rx) = channel(10);
+            let rx2 = tx.subscribe();
 
             let poller = ConfigPoller::new(management.clone(), opts.inway_name.clone());
             poller.poll_start(tx)?;
 
-            let broadcast = Broadcast::new(management, opts.inway_name, opts.self_address);
-            broadcast.broadcast_start()?;
+            let broadcast =
+                Broadcast::new(management, directory, opts.inway_name, opts.self_address);
+            broadcast.broadcast_start(rx2)?;
 
             log::info!("starting server on {}", opts.listen_address);
 
@@ -95,7 +113,8 @@ async fn main() -> Result<()> {
 async fn connect(addr: String, tls_config: ClientTlsConfig) -> Result<Channel> {
     let endpoint = Channel::from_shared(addr)?
         .tls_config(tls_config)
-        .with_context(|| "failed to setup TLS config")?;
+        .with_context(|| "failed to setup TLS config")?
+        .http2_keep_alive_interval(Duration::from_secs(20));
 
     log::debug!("connecting to: {}", endpoint.uri());
 

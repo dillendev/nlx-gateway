@@ -17,4 +17,11 @@ impl Hash for InwayConfig {
 #[derive(Debug, Clone, Default, Hash)]
 pub struct Service {
     pub name: String,
+    pub internal: bool,
+    pub documentation_url: String,
+    pub tech_support_contact: String,
+    pub public_support_contact: String,
+    pub one_time_costs: i32,
+    pub monthly_costs: i32,
+    pub request_costs: i32,
 }

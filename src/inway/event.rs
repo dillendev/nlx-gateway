@@ -1,6 +1,6 @@
 use super::InwayConfig;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
     ConfigUpdated(InwayConfig),
 }

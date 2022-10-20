@@ -5,7 +5,10 @@ use rocket::{
     config::{MutualTls, TlsConfig},
     routes,
 };
-use tokio::sync::{mpsc::Receiver, RwLock};
+use tokio::sync::{
+    broadcast::{error::RecvError, Receiver},
+    RwLock,
+};
 
 use crate::tls::TlsPair;
 
@@ -14,14 +17,20 @@ use super::{config, Event};
 type InwayConfig = Arc<RwLock<config::InwayConfig>>;
 
 async fn handle_events(config: InwayConfig, mut rx: Receiver<Event>) {
-    while let Some(event) = rx.recv().await {
-        match event {
-            Event::ConfigUpdated(new_config) => {
-                let mut lock = config.write().await;
-                *lock = new_config;
+    loop {
+        match rx.recv().await {
+            Ok(event) => match event {
+                Event::ConfigUpdated(new_config) => {
+                    let mut lock = config.write().await;
+                    *lock = new_config;
 
-                log::info!("inway config updated");
+                    log::info!("inway config updated");
+                }
+            },
+            Err(RecvError::Lagged(num)) => {
+                log::warn!("server is lagging, missed {} inway events", num);
             }
+            Err(RecvError::Closed) => break,
         }
     }
 }
@@ -80,7 +89,7 @@ mod routes {
 
         Json(Health {
             healthy,
-            version: "".to_string(),
+            version: String::new(),
         })
     }
 }
