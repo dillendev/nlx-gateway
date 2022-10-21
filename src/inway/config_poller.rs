@@ -79,6 +79,7 @@ fn map_config(response: GetInwayConfigResponse) -> InwayConfig {
                     Service {
                         name: s.name,
                         internal: s.internal,
+                        endpoint_url: s.endpoint_url,
                         documentation_url: s.documentation_url,
                         tech_support_contact: s.tech_support_contact,
                         public_support_contact: s.public_support_contact,

@@ -18,6 +18,7 @@ impl Hash for InwayConfig {
 pub struct Service {
     pub name: String,
     pub internal: bool,
+    pub endpoint_url: String,
     pub documentation_url: String,
     pub tech_support_contact: String,
     pub public_support_contact: String,

@@ -3,6 +3,7 @@ mod config;
 mod config_poller;
 mod event;
 mod server;
+mod stream;
 
 pub use broadcast::Broadcast;
 pub use config::{InwayConfig, Service};
