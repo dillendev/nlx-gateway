@@ -1071,7 +1071,6 @@ dependencies = [
  "futures-util",
  "hostname",
  "log",
- "openssl",
  "pretty_env_logger",
  "prost",
  "reqwest",

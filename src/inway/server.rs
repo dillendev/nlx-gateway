@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
+use reqwest::Client;
 use rocket::{
     config::{MutualTls, TlsConfig},
     routes,
@@ -62,9 +63,21 @@ impl Server {
         tokio::spawn(handle_events(Arc::clone(&config), self.rx));
 
         let _ = rocket::custom(figment)
-            .mount("/", routes![routes::proxy_get])
+            .mount(
+                "/",
+                routes![
+                    routes::head::proxy,
+                    routes::options::proxy,
+                    routes::get::proxy,
+                    routes::post::proxy,
+                    routes::put::proxy,
+                    routes::patch::proxy,
+                    routes::delete::proxy,
+                ],
+            )
             .mount("/.nlx", routes![routes::health])
             .manage(Arc::clone(&config))
+            .manage(Client::new())
             .launch()
             .await?;
 
@@ -80,18 +93,18 @@ mod routes {
 
     use bytes::Bytes;
     use futures_util::{Stream, StreamExt};
+    use reqwest::Client;
     use rocket::{
         get,
-        http::{uri::Origin, Method},
-        response::stream::stream,
+        http::{uri::Origin, Method, Status},
+        response::{status, stream::stream},
         serde::json::Json,
         State,
     };
     use serde::Serialize;
 
-    use crate::inway::stream::ByteStream;
-
     use super::InwayConfig;
+    use crate::inway::stream::ByteStream;
 
     #[derive(Serialize)]
     pub struct Health {
@@ -110,8 +123,9 @@ mod routes {
         }
     }
 
-    pub async fn proxy(
+    pub async fn reverse_proxy(
         method: Method,
+        http: Client,
         service: ServiceInfo,
         uri: &Origin<'_>,
         _ip_addr: IpAddr,
@@ -126,7 +140,8 @@ mod routes {
         log::debug!("proxy [{}] {} {}", service.name, method, path);
 
         ByteStream(stream! {
-            let response = reqwest::get(format!("{}/{}", service.endpoint, path))
+            let response = http.get(format!("{}/{}", service.endpoint, path))
+                .send()
                 .await
                 .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
             let mut response_stream = response.bytes_stream();
@@ -137,32 +152,64 @@ mod routes {
         })
     }
 
-    #[get("/<service>/<_..>")]
-    pub async fn proxy_get(
-        service: String,
-        uri: &Origin<'_>,
-        ip_addr: IpAddr,
-        config: &State<InwayConfig>,
-    ) -> ByteStream<impl Stream<Item = Result<Bytes, io::Error>>> {
-        let backend = {
-            let lock = config.read().await;
-            lock.services
-                .get(&service)
-                .map(|service| service.endpoint_url.clone())
+    macro_rules! proxy_impl {
+        ($method:ident) => {
+            pub mod $method {
+                use super::*;
+
+                #[rocket::$method("/<service>/<_..>")]
+                pub async fn proxy(
+                    service: String,
+                    uri: &Origin<'_>,
+                    ip_addr: IpAddr,
+                    config: &State<InwayConfig>,
+                    http: &State<Client>,
+                ) -> Result<
+                    ByteStream<impl Stream<Item = Result<Bytes, io::Error>>>,
+                    status::Custom<String>,
+                > {
+                    let backend = {
+                        let lock = config.read().await;
+                        lock.services
+                            .get(&service)
+                            .map(|service| service.endpoint_url.clone())
+                    };
+
+                    match backend {
+                        Some(endpoint) => {
+                            let info = ServiceInfo::new(service, endpoint);
+                            Ok(reverse_proxy(
+                                match stringify!($method) {
+                                    "get" => Method::Get,
+                                    _ => unreachable!(),
+                                },
+                                http.inner().clone(),
+                                info,
+                                uri,
+                                ip_addr,
+                            )
+                            .await)
+                        }
+                        None => {
+                            log::debug!("service {} not available", service);
+
+                            Err(status::Custom(
+                                Status::NotFound,
+                                format!("service {} not available", service),
+                            ))
+                        }
+                    }
+                }
+            }
         };
 
-        match backend {
-            Some(endpoint) => {
-                let info = ServiceInfo::new(service, endpoint);
-                proxy(Method::Get, info, uri, ip_addr).await
-            }
-            // @TODO: error handling
-            None => {
-                log::debug!("service {} not available", service);
-                panic!("fail")
-            }
-        }
+        ($($method:ident),+) => {
+            $(proxy_impl!($method);)+
+        };
     }
+
+    // Creates proxy routes for each HTTP method (unfortunately there is no `any` method in Rocket)
+    proxy_impl!(head, options, get, post, delete, put, patch);
 
     #[get("/health/<service>")]
     pub async fn health(config: &State<InwayConfig>, service: String) -> Json<Health> {
