@@ -172,7 +172,7 @@ mod routes {
         let path = raw_path
             .strip_prefix('/')
             .and_then(|p| p.strip_prefix(service.name.as_str()))
-            .and_then(|p| p.strip_suffix('/'))
+            .map(|p| p.strip_suffix('/').unwrap_or(p))
             .unwrap_or_else(|| RawStr::new(""));
 
         log::debug!("proxy [{}] {} /{}", service.name, method, path);
@@ -187,6 +187,7 @@ mod routes {
                     format!("request failed: {}", e),
                 )
             })?;
+        let status = response.status().as_u16();
         let headers = response.headers().clone();
 
         let mut bytes_response = ByteStreamResponse::new(stream! {
@@ -201,6 +202,7 @@ mod routes {
         copy_headers(headers, &mut headers_map);
 
         bytes_response.set_headers(headers_map);
+        bytes_response.set_status(Status::from_code(status).unwrap());
 
         Ok(bytes_response)
     }

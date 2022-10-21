@@ -2,7 +2,7 @@ use std::io;
 
 use futures_util::{TryStream, TryStreamExt};
 use rocket::{
-    http::HeaderMap,
+    http::{HeaderMap, Status},
     response::{self, Responder},
     Request, Response,
 };
@@ -11,6 +11,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 #[derive(Debug, Clone)]
 pub struct ByteStreamResponse<'r, S> {
     stream: S,
+    status: Status,
     headers: Option<HeaderMap<'r>>,
 }
 
@@ -18,12 +19,17 @@ impl<'r, S> ByteStreamResponse<'r, S> {
     pub fn new(stream: S) -> Self {
         Self {
             stream,
+            status: Status::Ok,
             headers: None,
         }
     }
 
     pub fn set_headers(&mut self, headers: HeaderMap<'r>) {
         self.headers = Some(headers);
+    }
+
+    pub fn set_status(&mut self, status: Status) {
+        self.status = status;
     }
 }
 
@@ -53,6 +59,7 @@ where
 
         builder
             .streamed_body(self.stream.into_async_read().compat())
+            .status(self.status)
             .ok()
     }
 }
