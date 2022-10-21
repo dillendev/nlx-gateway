@@ -96,7 +96,7 @@ mod routes {
     use reqwest::Client;
     use rocket::{
         get,
-        http::{uri::Origin, Method, Status},
+        http::{uri::Origin, Header, HeaderMap, Method, RawStr, Status},
         response::{status, stream::stream},
         serde::json::Json,
         State,
@@ -104,7 +104,7 @@ mod routes {
     use serde::Serialize;
 
     use super::InwayConfig;
-    use crate::inway::stream::ByteStream;
+    use crate::inway::stream::ByteStreamResponse;
 
     #[derive(Serialize)]
     pub struct Health {
@@ -123,33 +123,86 @@ mod routes {
         }
     }
 
-    pub async fn reverse_proxy(
+    #[inline]
+    fn is_hop_header(name: &str) -> bool {
+        matches!(
+            name,
+            "Connection"
+                | "Keep-Alive"
+                | "Proxy-Authenticate"
+                | "Proxy-Authorization"
+                | "TE"
+                | "Trailers"
+                | "Transfer-Encoding"
+                | "Upgrade"
+        )
+    }
+
+    fn copy_headers(headers: reqwest::header::HeaderMap, dest: &mut HeaderMap) {
+        let mut header_name = None;
+
+        for (name, value) in headers {
+            let name = name.unwrap_or_else(|| header_name.clone().unwrap());
+
+            if is_hop_header(name.as_str()) {
+                continue;
+            }
+
+            // @TODO: remove string allocations
+            dest.add(Header::new(
+                name.to_string(),
+                value.to_str().unwrap().to_string(),
+            ));
+
+            header_name = Some(name);
+        }
+    }
+
+    pub async fn reverse_proxy<'r>(
         method: Method,
         http: Client,
         service: ServiceInfo,
         uri: &Origin<'_>,
         _ip_addr: IpAddr,
-    ) -> ByteStream<impl Stream<Item = Result<Bytes, io::Error>>> {
-        let path = uri
-            .path()
+    ) -> Result<
+        ByteStreamResponse<'r, impl Stream<Item = Result<Bytes, io::Error>>>,
+        status::Custom<String>,
+    > {
+        let raw_path = uri.path();
+        let path = raw_path
             .strip_prefix('/')
             .and_then(|p| p.strip_prefix(service.name.as_str()))
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+            .and_then(|p| p.strip_suffix('/'))
+            .unwrap_or_else(|| RawStr::new(""));
 
-        log::debug!("proxy [{}] {} {}", service.name, method, path);
+        log::debug!("proxy [{}] {} /{}", service.name, method, path);
 
-        ByteStream(stream! {
-            let response = http.get(format!("{}/{}", service.endpoint, path))
-                .send()
-                .await
-                .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+        let response = http
+            .get([service.endpoint.as_str(), path.as_str()].concat())
+            .send()
+            .await
+            .map_err(|e| {
+                status::Custom(
+                    Status::InternalServerError,
+                    format!("request failed: {}", e),
+                )
+            })?;
+        let headers = response.headers().clone();
+
+        let mut bytes_response = ByteStreamResponse::new(stream! {
             let mut response_stream = response.bytes_stream();
 
             while let Some(item) = response_stream.next().await {
                 yield item.map_err(|e| io::Error::new(ErrorKind::Other, e));
             }
-        })
+        });
+
+        let mut headers_map = HeaderMap::new();
+        copy_headers(headers, &mut headers_map);
+
+        bytes_response.set_headers(headers_map);
+
+        Ok(bytes_response)
     }
 
     macro_rules! proxy_impl {
@@ -158,14 +211,14 @@ mod routes {
                 use super::*;
 
                 #[rocket::$method("/<service>/<_..>")]
-                pub async fn proxy(
+                pub async fn proxy<'r>(
                     service: String,
                     uri: &Origin<'_>,
                     ip_addr: IpAddr,
                     config: &State<InwayConfig>,
                     http: &State<Client>,
                 ) -> Result<
-                    ByteStream<impl Stream<Item = Result<Bytes, io::Error>>>,
+                    ByteStreamResponse<'r, impl Stream<Item = Result<Bytes, io::Error>>>,
                     status::Custom<String>,
                 > {
                     let backend = {
@@ -178,17 +231,14 @@ mod routes {
                     match backend {
                         Some(endpoint) => {
                             let info = ServiceInfo::new(service, endpoint);
-                            Ok(reverse_proxy(
-                                match stringify!($method) {
-                                    "get" => Method::Get,
-                                    _ => unreachable!(),
-                                },
+                            reverse_proxy(
+                                stringify!($method).parse().unwrap(),
                                 http.inner().clone(),
                                 info,
                                 uri,
                                 ip_addr,
                             )
-                            .await)
+                            .await
                         }
                         None => {
                             log::debug!("service {} not available", service);
