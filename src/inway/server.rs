@@ -96,7 +96,7 @@ mod routes {
         http::{uri::Origin, RawStr, Status},
         response::status,
         serde::json::Json,
-        State,
+        Data, State,
     };
     use serde::Serialize;
 
@@ -115,11 +115,12 @@ mod routes {
             pub mod $method {
                 use super::*;
 
-                #[rocket::$method("/<service>/<_..>")]
+                #[rocket::$method("/<service>/<_..>", data = "<body>")]
                 pub async fn proxy<'r>(
                     service: String,
                     mut request: Request<'r>,
                     uri: &'r Origin<'_>,
+                    body: Data<'r>,
                     config: &State<InwayConfig>,
                     http: &State<Client>,
                 ) -> Result<
@@ -146,7 +147,7 @@ mod routes {
 
                             log::debug!("proxy [{}] {}", service, request);
 
-                            reverse_proxy::handle(http.inner().clone(), request, &endpoint).await
+                            reverse_proxy::handle(http.inner().clone(), request, &endpoint, body).await
                         }
                         None => {
                             log::debug!("service {} not available", service);

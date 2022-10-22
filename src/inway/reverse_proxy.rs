@@ -9,12 +9,14 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use reqwest::{
     header::{HeaderName, HeaderValue},
-    Client, Url,
+    Body, Client, Url,
 };
 use rocket::{
+    data::ToByteUnit,
     http::{Header, HeaderMap, Method, Status},
     request::{FromRequest, Outcome},
     response::{status, stream::stream},
+    Data,
 };
 
 use super::stream::ByteStreamResponse;
@@ -71,6 +73,7 @@ impl<'r> Request<'r> {
         }
     }
 
+    #[inline]
     pub fn set_path(&mut self, path: impl Into<Cow<'r, str>>) {
         self.path = path.into();
     }
@@ -130,11 +133,22 @@ pub async fn handle<'r>(
     http: Client,
     request: Request<'r>,
     upstream: &str,
+    body: Data<'r>,
 ) -> Result<
     ByteStreamResponse<'r, impl Stream<Item = Result<Bytes, io::Error>>>,
     status::Custom<String>,
 > {
-    let response = http.execute(request.map(upstream)).await.map_err(|e| {
+    let body = body.open(15.mebibytes()).into_bytes().await.map_err(|e| {
+        status::Custom(
+            Status::InternalServerError,
+            format!("failed to read body: {}", e),
+        )
+    })?;
+
+    let mut request = request.map(upstream);
+    request.body_mut().replace(Body::from(body.value));
+
+    let response = http.execute(request).await.map_err(|e| {
         status::Custom(
             Status::InternalServerError,
             format!("request failed: {}", e),
