@@ -2,6 +2,7 @@ mod broadcast;
 mod config;
 mod config_poller;
 mod event;
+mod reverse_proxy;
 mod server;
 mod stream;
 

@@ -24,12 +24,14 @@ impl<'r, S> ByteStreamResponse<'r, S> {
         }
     }
 
-    pub fn set_headers(&mut self, headers: HeaderMap<'r>) {
+    pub fn set_headers(mut self, headers: HeaderMap<'r>) -> Self {
         self.headers = Some(headers);
+        self
     }
 
-    pub fn set_status(&mut self, status: Status) {
+    pub fn set_status(mut self, status: Status) -> Self {
         self.status = status;
+        self
     }
 }
 
@@ -49,17 +51,17 @@ where
     S::Ok: AsRef<[u8]> + Send,
 {
     fn respond_to(self, _: &'r Request<'_>) -> response::Result<'r> {
-        let mut builder = Response::build();
+        let mut response = Response::new();
 
         if let Some(headers) = self.headers {
             for header in headers.into_iter() {
-                builder.header(header);
+                response.set_header(header);
             }
         }
 
-        builder
-            .streamed_body(self.stream.into_async_read().compat())
-            .status(self.status)
-            .ok()
+        response.set_status(self.status);
+        response.set_streamed_body(self.stream.into_async_read().compat());
+
+        Ok(response)
     }
 }
