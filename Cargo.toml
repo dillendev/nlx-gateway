@@ -9,6 +9,8 @@ edition = "2021"
 debug = true
 
 [dependencies]
+http = "0.2.8"
+url = "2.3.1"
 log = "0.4.17"
 bytes = "1.2.1"
 prost = "0.11.0"
@@ -16,7 +18,7 @@ anyhow = "1.0.65"
 hostname = "0.3.1"
 futures-util = "0.3.25"
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.21.2", features = ["full"] }
+tokio = { version = "1.21.2", features = ["rt", "sync"] }
 serde = { version = "1.0.145", features = ["derive"] }
 reqwest = { version = "0.11.12", features = ["stream", "rustls-tls", "trust-dns"] }
 tonic = { version = "0.8.2", features = ["tls", "gzip"] }
@@ -24,8 +26,6 @@ clap = { version = "4.0.17", features = ["derive", "env"] }
 tokio-util = { version = "0.7.4", default-features = false, features = ["compat"] }
 warp = { version = "0.3.3", features = ["tls"] }
 backoff = { version = "0.4.0", features = ["futures", "tokio"] }
-http = "0.2.8"
-url = "2.3.1"
 
 [build-dependencies]
 tonic-build = "0.8.2"
