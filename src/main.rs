@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
             log::info!("starting server on {}", opts.listen_address);
 
             let server = Server::new(org_tls_pair, rx);
-            server.run(opts.listen_address).await;
+            server.run(opts.listen_address).await?;
         }
         Mode::Outway => unreachable!("outway is not implemented yet"),
     }

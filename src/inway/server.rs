@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 
 use serde::Serialize;
 use tokio::sync::{
@@ -54,14 +54,18 @@ impl Server {
         Self { tls_pair, rx }
     }
 
-    pub async fn run(self, addr: SocketAddr) {
+    pub async fn run(self, addr: SocketAddr) -> anyhow::Result<()> {
         let config = InwayConfig::default();
 
         // Handle config changes
         tokio::spawn(handle_events(Arc::clone(&config), self.rx));
 
         // Build warp filters
-        let client = Client::new();
+        let client = ClientBuilder::new()
+            .use_rustls_tls()
+            .trust_dns(true)
+            .http2_adaptive_window(true)
+            .build()?;
         let with_config = warp::any().map(move || Arc::clone(&config));
         let with_client = warp::any().map(move || client.clone());
         let optional_query = warp::filters::query::raw()
@@ -125,5 +129,7 @@ impl Server {
             .client_auth_required(self.tls_pair.bundle())
             .run(addr)
             .await;
+
+        Ok(())
     }
 }
