@@ -33,17 +33,8 @@ enum Mode {
 
 #[derive(Parser)]
 struct Opts {
-    #[clap(long, env = "MODE")]
-    mode: Mode,
-
-    #[clap(long, env = "INWAY_NAME")]
-    inway_name: String,
-
-    #[clap(long, env = "LISTEN_ADDRESS")]
-    listen_address: SocketAddr,
-
-    #[clap(long, env = "MANAGEMENT_API_ADDRESS")]
-    management_api_address: String,
+    #[clap(subcommand)]
+    cmd: Cmd,
 
     #[clap(long, env = "TLS_ROOT_CERT")]
     tls_root_cert: PathBuf,
@@ -62,6 +53,23 @@ struct Opts {
 
     #[clap(long, env = "TLS_ORG_KEY")]
     tls_org_key: PathBuf,
+}
+
+#[derive(Parser)]
+pub enum Cmd {
+    Inway(InwayOpts),
+}
+
+#[derive(Parser)]
+pub struct InwayOpts {
+    #[clap(long, env = "INWAY_NAME")]
+    name: String,
+
+    #[clap(long, env = "LISTEN_ADDRESS")]
+    listen_address: SocketAddr,
+
+    #[clap(long, env = "MANAGEMENT_API_ADDRESS")]
+    management_api_address: String,
 
     #[clap(long, env = "SELF_ADDRESS")]
     self_address: String,
@@ -75,13 +83,14 @@ async fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let opts = Opts::parse();
+
     let internal_tls_config =
         tls::client_config(opts.tls_root_cert, opts.tls_cert, opts.tls_key).await?;
     let org_tls_pair =
         TlsPair::from_files(opts.tls_nlx_root_cert, opts.tls_org_cert, opts.tls_org_key).await?;
 
-    match opts.mode {
-        Mode::Inway => {
+    match opts.cmd {
+        Cmd::Inway(opts) => {
             let directory = DirectoryClient::new(
                 connect(opts.directory_address, org_tls_pair.client_config()).await?,
             );
@@ -92,11 +101,10 @@ async fn main() -> Result<()> {
             let (tx, rx) = channel(10);
             let rx2 = tx.subscribe();
 
-            let poller = ConfigPoller::new(management.clone(), opts.inway_name.clone());
+            let poller = ConfigPoller::new(management.clone(), opts.name.clone());
             poller.poll_start(tx)?;
 
-            let broadcast =
-                Broadcast::new(management, directory, opts.inway_name, opts.self_address);
+            let broadcast = Broadcast::new(management, directory, opts.name, opts.self_address);
             broadcast.broadcast_start(rx2)?;
 
             log::info!("starting server on {}", opts.listen_address);
@@ -104,7 +112,6 @@ async fn main() -> Result<()> {
             let server = Server::new(org_tls_pair, rx);
             server.run(opts.listen_address).await?;
         }
-        Mode::Outway => unreachable!("outway is not implemented yet"),
     }
 
     Ok(())
