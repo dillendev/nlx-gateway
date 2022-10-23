@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use reqwest::{Client, ClientBuilder};
+use reqwest::ClientBuilder;
 
 use serde::Serialize;
 use tokio::sync::{

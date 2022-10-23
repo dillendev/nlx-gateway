@@ -8,12 +8,15 @@ use tokio::{
 };
 use tonic::{transport::Channel, Request};
 
-use crate::pb::{
-    directory::{
-        directory_client::DirectoryClient, register_inway_request::RegisterService,
-        RegisterInwayRequest,
+use crate::{
+    inway::backoff::retry_backoff,
+    pb::{
+        directory::{
+            directory_client::DirectoryClient, register_inway_request::RegisterService,
+            RegisterInwayRequest,
+        },
+        management::{management_client::ManagementClient, Inway},
     },
-    management::{management_client::ManagementClient, Inway},
 };
 
 use super::{Event, InwayConfig};
@@ -110,7 +113,7 @@ impl Broadcast {
         Ok(())
     }
 
-    async fn broadcast(&mut self, mut rx: Receiver<Event>) -> Result<()> {
+    async fn broadcast(&mut self, rx: &mut Receiver<Event>) -> Result<()> {
         self.register_inway().await?;
         log::info!("inway registered");
 
@@ -147,13 +150,18 @@ impl Broadcast {
         }
     }
 
-    pub fn broadcast_start(mut self, rx: Receiver<Event>) -> Result<JoinHandle<()>> {
+    pub fn broadcast_start(mut self, mut rx: Receiver<Event>) -> Result<JoinHandle<()>> {
         log::info!("start broadcasting");
 
         Ok(tokio::spawn(async move {
-            if let Err(e) = self.broadcast(rx).await {
-                log::error!("broadcasting failed: {:?}", e);
-            }
+            retry_backoff!(
+                self.broadcast(&mut rx),
+                |err, duration: Duration| log::warn!(
+                    "broadcast failed: {:?}, retrying in {} seconds",
+                    err,
+                    duration.as_secs()
+                )
+            );
         }))
     }
 }
