@@ -1,25 +1,16 @@
-use std::{
-    borrow::Cow,
-    fmt::{self, Display},
-    io::{self, ErrorKind},
-    net::IpAddr,
-};
+use std::fmt::{self, Display};
 
-use bytes::Bytes;
+use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use reqwest::{
-    header::{HeaderName, HeaderValue},
-    Body, Client, Url,
+use http::{HeaderMap, Method};
+use reqwest::{Body, Client, Url};
+use url::ParseError;
+use warp::{
+    path::Tail,
+    reject::{self, Reject},
+    reply::Response,
+    Rejection,
 };
-use rocket::{
-    data::ToByteUnit,
-    http::{Header, HeaderMap, Method, Status},
-    request::{FromRequest, Outcome},
-    response::{status, stream::stream},
-    Data,
-};
-
-use super::stream::ByteStreamResponse;
 
 #[inline]
 fn is_hop_header(name: &str) -> bool {
@@ -36,139 +27,113 @@ fn is_hop_header(name: &str) -> bool {
     )
 }
 
-fn copy_headers(headers: reqwest::header::HeaderMap, dest: &mut HeaderMap) {
+fn copy_headers(headers: HeaderMap, dest: &mut HeaderMap) {
     let mut header_name = None;
 
     for (name, value) in headers {
-        let name = name.unwrap_or_else(|| header_name.clone().unwrap());
+        let name = name.or_else(|| header_name.clone()).unwrap();
 
         if is_hop_header(name.as_str()) {
             continue;
         }
 
-        // @TODO: remove string allocations
-        dest.add(Header::new(
-            name.to_string(),
-            value.to_str().unwrap().to_string(),
-        ));
-
+        dest.append(name.clone(), value);
         header_name = Some(name);
     }
 }
 
-pub struct Request<'r> {
+#[derive(Debug)]
+pub struct UrlParseError(ParseError);
+
+impl Reject for UrlParseError {}
+
+pub struct Request<B: Buf, S: Stream<Item = Result<B, warp::Error>>> {
     method: Method,
-    path: Cow<'r, str>,
-    headers: Option<HeaderMap<'r>>,
-    client_ip: Option<IpAddr>,
+    path: Tail,
+    query: String,
+    headers: HeaderMap,
+    body: S,
 }
 
-impl<'r> Request<'r> {
-    pub fn new(method: Method, path: impl Into<Cow<'r, str>>) -> Self {
+impl<B, S> Request<B, S>
+where
+    B: Buf,
+    S: Stream<Item = Result<B, warp::Error>> + Send + Sync + 'static,
+{
+    pub fn new(method: Method, path: Tail, query: String, headers: HeaderMap, body: S) -> Self {
         Self {
             method,
-            path: path.into(),
-            headers: None,
-            client_ip: None,
+            path,
+            query,
+            headers,
+            body,
         }
     }
 
-    #[inline]
-    pub fn set_path(&mut self, path: impl Into<Cow<'r, str>>) {
-        self.path = path.into();
-    }
+    // @TODO: remove `unwrap`
+    pub fn into_reqwest(self, upstream: &str) -> Result<reqwest::Request, Rejection> {
+        let mut url = Url::parse(upstream)
+            .and_then(|url| url.join(self.path.as_str()))
+            .map_err(|e| reject::custom(UrlParseError(e)))?;
 
-    pub fn map(self, upstream: &str) -> reqwest::Request {
-        let url = [upstream, &self.path].concat();
-        let mut request = reqwest::Request::new(
-            self.method.as_str().parse().unwrap(),
-            Url::parse(&url).unwrap(),
-        );
-
-        let request_headers = request.headers_mut();
-
-        if let Some(headers) = self.headers {
-            for header in headers.into_iter() {
-                let name = header.name.as_str();
-
-                if is_hop_header(name) {
-                    continue;
-                }
-
-                // Using `unwrap` should be safe as the headers were succesfully parsed in the first place
-                request_headers.insert(
-                    name.parse::<HeaderName>().unwrap(),
-                    HeaderValue::from_str(header.value.as_ref()).unwrap(),
-                );
-            }
+        if !self.query.is_empty() {
+            url.set_query(Some(self.query.as_str()));
         }
 
-        request
+        let mut out = reqwest::Request::new(self.method, url);
+
+        let headers = out.headers_mut();
+        copy_headers(self.headers, headers);
+
+        let stream = self
+            .body
+            .map(|buf| buf.map(|mut buf| buf.copy_to_bytes(buf.remaining())));
+
+        out.body_mut().replace(Body::wrap_stream(stream));
+
+        Ok(out)
     }
 }
 
-impl<'r> Display for Request<'r> {
+// Instead of depending on `hyper` directly, use the exported `Body` struct from the `tonic` crate
+type HyperBody = tonic::transport::Body;
+
+#[derive(Debug)]
+pub struct ReqwestError(reqwest::Error);
+
+impl Reject for ReqwestError {}
+
+impl<B, S> Display for Request<B, S>
+where
+    B: Buf,
+    S: Stream<Item = Result<B, warp::Error>>,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} /{}", self.method, self.path)
+        write!(f, "{} /{}", self.method, self.path.as_str())
     }
 }
 
-#[rocket::async_trait]
-impl<'r> FromRequest<'r> for Request<'r> {
-    type Error = anyhow::Error;
-
-    async fn from_request(req: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
-        let mut request = Request::new(req.method(), req.uri().path().as_str());
-        request.headers = Some(req.headers().clone());
-
-        if let Outcome::Success(ip_addr) = IpAddr::from_request(req).await {
-            request.client_ip = Some(ip_addr);
-        }
-
-        Outcome::Success(request)
-    }
-}
-
-pub async fn handle<'r>(
+pub async fn handle<B, S>(
     http: Client,
-    request: Request<'r>,
+    request: Request<B, S>,
     upstream: &str,
-    body: Data<'r>,
-) -> Result<
-    ByteStreamResponse<'r, impl Stream<Item = Result<Bytes, io::Error>>>,
-    status::Custom<String>,
-> {
-    let body = body.open(15.mebibytes()).into_bytes().await.map_err(|e| {
-        status::Custom(
-            Status::InternalServerError,
-            format!("failed to read body: {}", e),
-        )
-    })?;
-
-    let mut request = request.map(upstream);
-    request.body_mut().replace(Body::from(body.value));
-
-    let response = http.execute(request).await.map_err(|e| {
-        status::Custom(
-            Status::InternalServerError,
-            format!("request failed: {}", e),
-        )
-    })?;
-    let status = response.status().as_u16();
+) -> Result<Response, Rejection>
+where
+    B: Buf,
+    S: Stream<Item = Result<B, warp::Error>> + Send + Sync + 'static,
+{
+    let request = request.into_reqwest(upstream)?;
+    let response = http
+        .execute(request)
+        .await
+        .map_err(|e| reject::custom(ReqwestError(e)))?;
+    let status = response.status();
     let headers = response.headers().clone();
 
-    let bytes_response = ByteStreamResponse::new(stream! {
-        let mut response_stream = response.bytes_stream();
+    let mut proxy_response = Response::new(HyperBody::wrap_stream(response.bytes_stream()));
+    copy_headers(headers, proxy_response.headers_mut());
 
-        while let Some(item) = response_stream.next().await {
-            yield item.map_err(|e| io::Error::new(ErrorKind::Other, e));
-        }
-    });
+    *proxy_response.status_mut() = status;
 
-    let mut headers_map = HeaderMap::new();
-    copy_headers(headers, &mut headers_map);
-
-    Ok(bytes_response
-        .set_headers(headers_map)
-        .set_status(Status::from_code(status).unwrap()))
+    Ok(proxy_response)
 }

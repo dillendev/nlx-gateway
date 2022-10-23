@@ -20,6 +20,9 @@ tonic = { version = "0.8.2", features = ["tls", "gzip"] }
 clap = { version = "4.0.17", features = ["derive", "env"] }
 rocket = { version = "0.5.0-rc.2", features = ["json", "mtls"]}
 tokio-util = { version = "0.7.4", default-features = false, features = ["compat"] }
+warp = { version = "0.3.3", features = ["tls"] }
+http = "0.2.8"
+url = "2.3.1"
 
 [build-dependencies]
 tonic-build = "0.8.2"

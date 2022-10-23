@@ -1,19 +1,21 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use anyhow::Result;
 use reqwest::Client;
-use rocket::{
-    config::{MutualTls, TlsConfig},
-    routes,
-};
+
+use serde::Serialize;
 use tokio::sync::{
     broadcast::{error::RecvError, Receiver},
     RwLock,
 };
+use warp::{path::Tail, Filter};
 
 use crate::tls::TlsPair;
 
-use super::{config, Event};
+use super::{
+    config,
+    reverse_proxy::{self, Request},
+    Event,
+};
 
 type InwayConfig = Arc<RwLock<config::InwayConfig>>;
 
@@ -36,6 +38,12 @@ async fn handle_events(config: InwayConfig, mut rx: Receiver<Event>) {
     }
 }
 
+#[derive(Serialize)]
+pub struct Health {
+    pub healthy: bool,
+    pub version: String,
+}
+
 pub struct Server {
     tls_pair: TlsPair,
     rx: Receiver<Event>,
@@ -46,137 +54,76 @@ impl Server {
         Self { tls_pair, rx }
     }
 
-    pub async fn run(self, addr: SocketAddr) -> Result<()> {
-        let certs_bundle = self.tls_pair.bundle();
-        let figment = rocket::Config::figment()
-            .merge(("address", addr.ip()))
-            .merge(("port", addr.port()))
-            .merge((
-                "tls",
-                TlsConfig::from_bytes(&certs_bundle, &self.tls_pair.key_pem)
-                    .with_mutual(MutualTls::from_bytes(&certs_bundle).mandatory(true)),
-            ));
-
+    pub async fn run(self, addr: SocketAddr) {
         let config = InwayConfig::default();
 
         // Handle config changes
         tokio::spawn(handle_events(Arc::clone(&config), self.rx));
 
-        let _ = rocket::custom(figment)
-            .mount(
-                "/",
-                routes![
-                    routes::head::proxy,
-                    routes::options::proxy,
-                    routes::get::proxy,
-                    routes::post::proxy,
-                    routes::put::proxy,
-                    routes::patch::proxy,
-                    routes::delete::proxy,
-                ],
-            )
-            .mount("/.nlx", routes![routes::health])
-            .manage(Arc::clone(&config))
-            .manage(Client::new())
-            .launch()
-            .await?;
+        // Build warp filters
+        let client = Client::new();
+        let with_config = warp::any().map(move || Arc::clone(&config));
+        let with_client = warp::any().map(move || client.clone());
+        let optional_query = warp::filters::query::raw()
+            .or(warp::any().map(String::default))
+            .unify();
+        let with_request = warp::any()
+            .and(warp::method())
+            .and(warp::filters::path::tail())
+            .and(optional_query)
+            .and(warp::header::headers_cloned())
+            .and(warp::body::stream())
+            .map(|method, path: Tail, query, headers, body| {
+                Request::new(method, path, query, headers, body)
+            });
 
-        Ok(())
-    }
-}
-
-mod routes {
-    use std::io;
-
-    use bytes::Bytes;
-    use futures_util::Stream;
-    use reqwest::Client;
-    use rocket::{
-        get,
-        http::{uri::Origin, RawStr, Status},
-        response::status,
-        serde::json::Json,
-        Data, State,
-    };
-    use serde::Serialize;
-
-    use super::InwayConfig;
-    use crate::inway::reverse_proxy::{self, Request};
-    use crate::inway::stream::ByteStreamResponse;
-
-    #[derive(Serialize)]
-    pub struct Health {
-        pub healthy: bool,
-        pub version: String,
-    }
-
-    macro_rules! proxy_impl {
-        ($method:ident) => {
-            pub mod $method {
-                use super::*;
-
-                #[rocket::$method("/<service>/<_..>", data = "<body>")]
-                pub async fn proxy<'r>(
-                    service: String,
-                    mut request: Request<'r>,
-                    uri: &'r Origin<'_>,
-                    body: Data<'r>,
-                    config: &State<InwayConfig>,
-                    http: &State<Client>,
-                ) -> Result<
-                    ByteStreamResponse<'r, impl Stream<Item = Result<Bytes, io::Error>>>,
-                    status::Custom<String>,
-                > {
+        // Setup routes
+        let proxy = warp::any()
+            .and(with_config.clone())
+            .and(with_client)
+            .and(warp::path::param())
+            .and(with_request)
+            .and_then(
+                |config: InwayConfig, client, service: String, request| async move {
                     let upstream = {
-                        let lock = config.read().await;
-                        lock.services
+                        config
+                            .read()
+                            .await
+                            .services
                             .get(&service)
-                            .map(|service| service.endpoint_url.clone())
+                            .map(|svc| svc.endpoint_url.clone())
                     };
 
                     match upstream {
-                        Some(endpoint) => {
-                            let raw_path = uri.path();
-                            let path = raw_path
-                                .strip_prefix('/')
-                                .and_then(|p| p.strip_prefix(service.as_str()))
-                                .map(|p| p.strip_suffix('/').unwrap_or(p))
-                                .unwrap_or_else(|| RawStr::new(""));
-
-                            request.set_path(path.to_string());
-
-                            log::debug!("proxy [{}] {}", service, request);
-
-                            reverse_proxy::handle(http.inner().clone(), request, &endpoint, body).await
+                        Some(upstream) => {
+                            log::debug!("proxy {}: {}", service, request);
+                            reverse_proxy::handle(client, request, &upstream).await
                         }
-                        None => {
-                            log::debug!("service {} not available", service);
-
-                            Err(status::Custom(
-                                Status::NotFound,
-                                format!("service {} not available", service),
-                            ))
-                        }
+                        None => Err(warp::reject::not_found()),
                     }
-                }
-            }
-        };
+                },
+            );
+        let health = warp::get()
+            .and(warp::path(".nlx"))
+            .and(warp::path("health"))
+            .and(with_config)
+            .and(warp::path::param())
+            .then(|config: InwayConfig, service: String| async move {
+                let healthy = { config.read().await.services.contains_key(&service) };
 
-        ($($method:ident),+) => {
-            $(proxy_impl!($method);)+
-        };
-    }
+                warp::reply::json(&Health {
+                    healthy,
+                    version: String::new(),
+                })
+            });
 
-    // Creates proxy routes for each HTTP method (unfortunately there is no `any` method in Rocket)
-    proxy_impl!(head, options, get, post, delete, put, patch);
-
-    #[get("/health/<service>")]
-    pub async fn health(config: &State<InwayConfig>, service: String) -> Json<Health> {
-        let healthy = { config.read().await.services.contains_key(&service) };
-
-        Json(Health {
-            healthy,
-            version: String::new(),
-        })
+        // Run the server
+        warp::serve(health.or(proxy))
+            .tls()
+            .cert(&self.tls_pair.cert_pem)
+            .key(&self.tls_pair.key_pem)
+            .client_auth_required(self.tls_pair.bundle())
+            .run(addr)
+            .await;
     }
 }
