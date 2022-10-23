@@ -31,6 +31,7 @@ fn get_hostname() -> Result<String> {
 }
 
 const BROADCAST_INTERVAL: Duration = Duration::from_secs(10);
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Broadcast {
     inway_name: String,
@@ -58,7 +59,7 @@ impl Broadcast {
         self.management
             .register_inway(Inway {
                 name: self.inway_name.clone(),
-                version: "0.0.1".to_string(),
+                version: VERSION.to_string(),
                 hostname: get_hostname()?,
                 self_address: self.inway_address.clone(),
                 services: vec![],
@@ -98,7 +99,7 @@ impl Broadcast {
 
         let metadata = request.metadata_mut();
         metadata.append("nlx-component", "inway".parse()?);
-        metadata.append("nlx-version", "0.0.1".parse()?);
+        metadata.append("nlx-version", VERSION.parse()?);
 
         let response = self.directory.register_inway(request).await?;
         let result = response.get_ref();
