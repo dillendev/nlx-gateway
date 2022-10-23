@@ -11,8 +11,11 @@ use tokio::sync::broadcast::channel;
 use tonic::transport::{Channel, ClientTlsConfig};
 
 use crate::inway::{Broadcast, ConfigPoller, Server};
+use crate::poller::Poller;
 
+mod backoff;
 mod inway;
+mod poller;
 mod tls;
 
 pub mod pb {
@@ -53,11 +56,15 @@ struct Opts {
 
     #[clap(long, env = "TLS_ORG_KEY")]
     tls_org_key: PathBuf,
+
+    #[clap(long, env = "DIRECTORY_ADDRESS")]
+    directory_address: String,
 }
 
 #[derive(Parser)]
 pub enum Cmd {
     Inway(InwayOpts),
+    Outway(OutwayOpts),
 }
 
 #[derive(Parser)]
@@ -73,9 +80,15 @@ pub struct InwayOpts {
 
     #[clap(long, env = "SELF_ADDRESS")]
     self_address: String,
+}
 
-    #[clap(long, env = "DIRECTORY_ADDRESS")]
-    directory_address: String,
+#[derive(Parser)]
+pub struct OutwayOpts {
+    #[clap(long, env = "OUTWAY_NAME")]
+    name: String,
+
+    #[clap(long, env = "LISTEN_ADDRESS")]
+    listen_address: SocketAddr,
 }
 
 #[tokio::main]
@@ -89,11 +102,11 @@ async fn main() -> Result<()> {
     let org_tls_pair =
         TlsPair::from_files(opts.tls_nlx_root_cert, opts.tls_org_cert, opts.tls_org_key).await?;
 
+    let directory =
+        DirectoryClient::new(connect(opts.directory_address, org_tls_pair.client_config()).await?);
+
     match opts.cmd {
         Cmd::Inway(opts) => {
-            let directory = DirectoryClient::new(
-                connect(opts.directory_address, org_tls_pair.client_config()).await?,
-            );
             let management = ManagementClient::new(
                 connect(opts.management_api_address, internal_tls_config.clone()).await?,
             );
@@ -101,8 +114,11 @@ async fn main() -> Result<()> {
             let (tx, rx) = channel(10);
             let rx2 = tx.subscribe();
 
-            let poller = ConfigPoller::new(management.clone(), opts.name.clone());
-            poller.poll_start(tx)?;
+            let poller = Poller::new(
+                ConfigPoller::new(management.clone(), opts.name.clone()),
+                Duration::from_secs(10),
+            );
+            poller.poll_start(tx);
 
             let broadcast = Broadcast::new(management, directory, opts.name, opts.self_address);
             broadcast.broadcast_start(rx2)?;
@@ -111,6 +127,9 @@ async fn main() -> Result<()> {
 
             let server = Server::new(org_tls_pair, rx);
             server.run(opts.listen_address).await?;
+        }
+        Cmd::Outway(_opts) => {
+            todo!()
         }
     }
 

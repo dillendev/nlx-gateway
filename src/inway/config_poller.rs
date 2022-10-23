@@ -5,14 +5,14 @@ use std::{
 };
 
 use anyhow::Result;
-use tokio::{sync::broadcast::Sender, task::JoinHandle, time};
-use tonic::transport::Channel;
+use tokio::{sync::broadcast::Sender, time};
+use tonic::{async_trait, transport::Channel};
 
 use crate::{
-    inway::backoff::retry_backoff,
     pb::management::{
         management_client::ManagementClient, GetInwayConfigRequest, GetInwayConfigResponse,
     },
+    poller::PollImpl,
 };
 
 use super::{Event, InwayConfig, Service};
@@ -29,9 +29,13 @@ impl ConfigPoller {
             inway_name,
         }
     }
+}
 
-    // @TODO: autorestart on failure
-    pub async fn poll(&mut self, tx: &mut Sender<Event>) -> Result<()> {
+#[async_trait]
+impl PollImpl for ConfigPoller {
+    type Event = Event;
+
+    async fn poll(&mut self, tx: &mut Sender<Event>) -> Result<()> {
         let mut interval = time::interval(Duration::from_secs(10));
         let mut old_hash = None;
 
@@ -58,18 +62,6 @@ impl ConfigPoller {
                 old_hash = Some(new_hash);
             }
         }
-    }
-
-    pub fn poll_start(mut self, mut tx: Sender<Event>) -> Result<JoinHandle<()>> {
-        log::info!("start polling for config changes");
-
-        Ok(tokio::spawn(async move {
-            retry_backoff!(self.poll(&mut tx), |err, duration: Duration| log::warn!(
-                "failed to poll config: {}, retrying in {:?}",
-                err,
-                duration.as_secs()
-            ));
-        }))
     }
 }
 

@@ -9,7 +9,7 @@ use tokio::{
 use tonic::{transport::Channel, Request};
 
 use crate::{
-    inway::backoff::retry_backoff,
+    backoff::retry_backoff,
     pb::{
         directory::{
             directory_client::DirectoryClient, register_inway_request::RegisterService,
