@@ -4,7 +4,6 @@ mod config_poller;
 mod event;
 mod reverse_proxy;
 mod server;
-mod stream;
 
 pub use broadcast::Broadcast;
 pub use config::{InwayConfig, Service};
