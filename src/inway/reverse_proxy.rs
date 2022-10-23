@@ -70,7 +70,6 @@ where
         }
     }
 
-    // @TODO: remove `unwrap`
     pub fn into_reqwest(self, upstream: &str) -> Result<reqwest::Request, Rejection> {
         let mut url = Url::parse(upstream)
             .and_then(|url| url.join(self.path.as_str()))
