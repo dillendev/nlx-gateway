@@ -5,6 +5,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.release]
+debug = true
+
 [dependencies]
 log = "0.4.17"
 bytes = "1.2.1"
@@ -15,7 +18,7 @@ futures-util = "0.3.25"
 pretty_env_logger = "0.4.0"
 tokio = { version = "1.21.2", features = ["full"] }
 serde = { version = "1.0.145", features = ["derive"] }
-reqwest = { version = "0.11.12", features = ["stream"] }
+reqwest = { version = "0.11.12", features = ["stream", "rustls-tls"] }
 tonic = { version = "0.8.2", features = ["tls", "gzip"] }
 clap = { version = "4.0.17", features = ["derive", "env"] }
 tokio-util = { version = "0.7.4", default-features = false, features = ["compat"] }
