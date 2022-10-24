@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
             let server = Server::new(org_tls_pair, rx);
             server.run(opts.listen_address).await?;
         }
-        Cmd::Outway(_opts) => {
+        Cmd::Outway(opts) => {
             todo!()
         }
     }

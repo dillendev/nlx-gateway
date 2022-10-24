@@ -1,69 +1,20 @@
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    time::Duration,
 };
 
 use anyhow::Result;
-use tokio::{sync::broadcast::Sender, time};
+use tokio::sync::broadcast::Sender;
 use tonic::{async_trait, transport::Channel};
 
 use crate::{
     pb::management::{
         management_client::ManagementClient, GetInwayConfigRequest, GetInwayConfigResponse,
     },
-    poller::PollImpl,
+    poller::Poll,
 };
 
 use super::{Event, InwayConfig, Service};
-
-pub struct ConfigPoller {
-    inway_name: String,
-    management: ManagementClient<Channel>,
-}
-
-impl ConfigPoller {
-    pub fn new(management: ManagementClient<Channel>, inway_name: String) -> Self {
-        ConfigPoller {
-            management,
-            inway_name,
-        }
-    }
-}
-
-#[async_trait]
-impl PollImpl for ConfigPoller {
-    type Event = Event;
-
-    async fn poll(&mut self, tx: &mut Sender<Event>) -> Result<()> {
-        let mut interval = time::interval(Duration::from_secs(10));
-        let mut old_hash = None;
-
-        loop {
-            interval.tick().await;
-            log::trace!("retrieving config from management API");
-
-            let response = self
-                .management
-                .get_inway_config(GetInwayConfigRequest {
-                    name: self.inway_name.clone(),
-                })
-                .await?;
-            let config = map_config(response.into_inner());
-
-            let mut hasher = DefaultHasher::new();
-            config.hash(&mut hasher);
-            let new_hash = hasher.finish();
-
-            if old_hash != Some(new_hash) {
-                log::debug!("config changed");
-                tx.send(Event::ConfigUpdated(config))?;
-
-                old_hash = Some(new_hash);
-            }
-        }
-    }
-}
 
 fn map_config(response: GetInwayConfigResponse) -> InwayConfig {
     InwayConfig {
@@ -87,5 +38,51 @@ fn map_config(response: GetInwayConfigResponse) -> InwayConfig {
                 )
             })
             .collect(),
+    }
+}
+
+pub struct ConfigPoller {
+    inway_name: String,
+    management: ManagementClient<Channel>,
+    config_hash: Option<u64>,
+}
+
+impl ConfigPoller {
+    pub fn new(management: ManagementClient<Channel>, inway_name: String) -> Self {
+        ConfigPoller {
+            management,
+            inway_name,
+            config_hash: None,
+        }
+    }
+}
+
+#[async_trait]
+impl Poll for ConfigPoller {
+    type Event = Event;
+
+    async fn poll(&mut self, tx: &mut Sender<Event>) -> Result<()> {
+        log::trace!("retrieving config from management API");
+
+        let response = self
+            .management
+            .get_inway_config(GetInwayConfigRequest {
+                name: self.inway_name.clone(),
+            })
+            .await?;
+        let config = map_config(response.into_inner());
+
+        let mut hasher = DefaultHasher::new();
+        config.hash(&mut hasher);
+        let new_hash = hasher.finish();
+
+        if self.config_hash != Some(new_hash) {
+            log::debug!("config changed");
+            tx.send(Event::ConfigUpdated(config))?;
+
+            self.config_hash = Some(new_hash);
+        }
+
+        Ok(())
     }
 }

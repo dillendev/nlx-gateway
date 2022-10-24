@@ -158,7 +158,7 @@ impl Broadcast {
             retry_backoff!(
                 self.broadcast(&mut rx),
                 |err, duration: Duration| log::warn!(
-                    "broadcast failed: {:?}, retrying in {} seconds",
+                    "broadcast failed: {:?}, retrying in {}s",
                     err,
                     duration.as_secs()
                 )

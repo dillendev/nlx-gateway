@@ -7,7 +7,7 @@ use tonic::async_trait;
 use crate::backoff::retry_backoff;
 
 #[async_trait]
-pub trait PollImpl {
+pub trait Poll {
     type Event;
 
     async fn poll(&mut self, tx: &mut Sender<Self::Event>) -> Result<()>
@@ -15,12 +15,12 @@ pub trait PollImpl {
         Self::Event: Send + Sync + 'static;
 }
 
-pub struct Poller<T: PollImpl> {
+pub struct Poller<T: Poll> {
     poll: T,
     duration: Duration,
 }
 
-impl<T: PollImpl + Sync + Send + 'static> Poller<T>
+impl<T: Poll + Sync + Send + 'static> Poller<T>
 where
     T::Event: Send + Sync + 'static,
 {
@@ -42,7 +42,7 @@ where
 
         tokio::spawn(async move {
             retry_backoff!(self.poll(&mut tx), |err, duration: Duration| log::warn!(
-                "failed to poll: {}, retrying in {:?}",
+                "failed to poll: {}, retrying in {:?}s",
                 err,
                 duration.as_secs()
             ));
