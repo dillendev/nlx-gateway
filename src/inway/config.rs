@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Default)]
-pub struct InwayConfig {
+pub struct Config {
     pub services: HashMap<String, Service>,
 }
 
-impl Hash for InwayConfig {
+impl Hash for Config {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for service in self.services.iter() {
             service.hash(state);

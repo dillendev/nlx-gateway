@@ -8,9 +8,12 @@ package directoryapi;
 import "google/protobuf/empty.proto";
 
 service Directory {
-  rpc RegisterInway(RegisterInwayRequest) returns (RegisterInwayResponse);
   rpc GetVersion(google.protobuf.Empty) returns (GetVersionResponse) {};
+  rpc RegisterInway(RegisterInwayRequest) returns (RegisterInwayResponse);
+  rpc RegisterOutway(RegisterOutwayRequest) returns (RegisterOutwayResponse);
 }
+
+message GetVersionResponse { string version = 1; }
 
 message RegisterInwayRequest {
   message RegisterService {
@@ -36,4 +39,6 @@ message RegisterInwayRequest {
 
 message RegisterInwayResponse { string error = 1; }
 
-message GetVersionResponse { string version = 1; }
+message RegisterOutwayRequest { string name = 1; }
+
+message RegisterOutwayResponse { string error = 1; }

@@ -14,22 +14,20 @@ use crate::tls::TlsPair;
 use super::{
     config,
     reverse_proxy::{self, Request},
-    Event,
+    Config,
 };
 
-type InwayConfig = Arc<RwLock<config::InwayConfig>>;
+type InwayConfig = Arc<RwLock<config::Config>>;
 
-async fn handle_events(config: InwayConfig, mut rx: Receiver<Event>) {
+async fn handle_events(config: InwayConfig, mut rx: Receiver<Config>) {
     loop {
         match rx.recv().await {
-            Ok(event) => match event {
-                Event::ConfigUpdated(new_config) => {
-                    let mut lock = config.write().await;
-                    *lock = new_config;
+            Ok(new_config) => {
+                let mut lock = config.write().await;
+                *lock = new_config;
 
-                    log::info!("inway config updated");
-                }
-            },
+                log::info!("inway config updated");
+            }
             Err(RecvError::Lagged(num)) => {
                 log::warn!("server is lagging, missed {} inway events", num);
             }
@@ -46,11 +44,11 @@ pub struct Health {
 
 pub struct Server {
     tls_pair: TlsPair,
-    rx: Receiver<Event>,
+    rx: Receiver<Config>,
 }
 
 impl Server {
-    pub fn new(tls_pair: TlsPair, rx: Receiver<Event>) -> Self {
+    pub fn new(tls_pair: TlsPair, rx: Receiver<Config>) -> Self {
         Self { tls_pair, rx }
     }
 

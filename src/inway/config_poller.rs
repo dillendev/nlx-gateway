@@ -14,10 +14,10 @@ use crate::{
     poller::Poll,
 };
 
-use super::{Event, InwayConfig, Service};
+use super::{Config, Service};
 
-fn map_config(response: GetInwayConfigResponse) -> InwayConfig {
-    InwayConfig {
+fn map_config(response: GetInwayConfigResponse) -> Config {
+    Config {
         services: response
             .services
             .into_iter()
@@ -59,9 +59,9 @@ impl ConfigPoller {
 
 #[async_trait]
 impl Poll for ConfigPoller {
-    type Event = Event;
+    type Event = Config;
 
-    async fn poll(&mut self, tx: &mut Sender<Event>) -> Result<()> {
+    async fn poll(&mut self, tx: &mut Sender<Config>) -> Result<()> {
         log::trace!("retrieving config from management API");
 
         let response = self
@@ -78,7 +78,7 @@ impl Poll for ConfigPoller {
 
         if self.config_hash != Some(new_hash) {
             log::debug!("config changed");
-            tx.send(Event::ConfigUpdated(config))?;
+            tx.send(config)?;
 
             self.config_hash = Some(new_hash);
         }

@@ -10,7 +10,7 @@ service Management {
   // As the `Inway` is the only field of the `RegisterInwayRequest` message, for
   // some reason it's skipped entirely
   rpc RegisterInway(Inway) returns (Inway) {}
-
+  rpc RegisterOutway(RegisterOutwayRequest) returns (RegisterOutwayResponse) {}
   rpc GetInwayConfig(GetInwayConfigRequest) returns (GetInwayConfigResponse) {}
 }
 
@@ -63,3 +63,12 @@ message GetInwayConfigResponse {
     }
   }
 }
+
+message RegisterOutwayRequest {
+  string name = 1;
+  string public_key_pem = 2;
+  string version = 3;
+  string self_address_api = 4;
+}
+
+message RegisterOutwayResponse {}

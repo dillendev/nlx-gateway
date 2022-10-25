@@ -3,6 +3,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use futures_util::TryFutureExt;
 use pb::{
     directory::directory_client::DirectoryClient, management::management_client::ManagementClient,
 };
@@ -10,11 +11,12 @@ use tls::TlsPair;
 use tokio::sync::broadcast::channel;
 use tonic::transport::{Channel, ClientTlsConfig};
 
-use crate::inway::{Broadcast, ConfigPoller, Server};
+use crate::inway::ConfigPoller;
 use crate::poller::Poller;
 
 mod backoff;
 mod inway;
+mod outway;
 mod poller;
 mod tls;
 
@@ -59,6 +61,9 @@ struct Opts {
 
     #[clap(long, env = "DIRECTORY_ADDRESS")]
     directory_address: String,
+
+    #[clap(long, env = "MANAGEMENT_API_ADDRESS")]
+    management_api_address: String,
 }
 
 #[derive(Parser)]
@@ -74,9 +79,6 @@ pub struct InwayOpts {
 
     #[clap(long, env = "LISTEN_ADDRESS")]
     listen_address: SocketAddr,
-
-    #[clap(long, env = "MANAGEMENT_API_ADDRESS")]
-    management_api_address: String,
 
     #[clap(long, env = "SELF_ADDRESS")]
     self_address: String,
@@ -102,15 +104,14 @@ async fn main() -> Result<()> {
     let org_tls_pair =
         TlsPair::from_files(opts.tls_nlx_root_cert, opts.tls_org_cert, opts.tls_org_key).await?;
 
-    let directory =
-        DirectoryClient::new(connect(opts.directory_address, org_tls_pair.client_config()).await?);
+    let (management, directory) = tokio::try_join!(
+        connect(opts.management_api_address, internal_tls_config.clone())
+            .map_ok(ManagementClient::new),
+        connect(opts.directory_address, org_tls_pair.client_config()).map_ok(DirectoryClient::new),
+    )?;
 
     match opts.cmd {
         Cmd::Inway(opts) => {
-            let management = ManagementClient::new(
-                connect(opts.management_api_address, internal_tls_config.clone()).await?,
-            );
-
             let (tx, rx) = channel(10);
             let rx2 = tx.subscribe();
 
@@ -120,16 +121,30 @@ async fn main() -> Result<()> {
             );
             poller.poll_start(tx);
 
-            let broadcast = Broadcast::new(management, directory, opts.name, opts.self_address);
+            let broadcast =
+                inway::Broadcast::new(management, directory, opts.name, opts.self_address);
             broadcast.broadcast_start(rx2)?;
 
             log::info!("starting server on {}", opts.listen_address);
 
-            let server = Server::new(org_tls_pair, rx);
+            let server = inway::Server::new(org_tls_pair, rx);
             server.run(opts.listen_address).await?;
         }
         Cmd::Outway(opts) => {
-            todo!()
+            // Parse public key (of the organization) from the certificate
+            let (_tx, rx) = channel(10);
+            let broadcast = outway::Broadcast::new(
+                management,
+                directory,
+                org_tls_pair.public_key_pem()?,
+                opts.name,
+            );
+            broadcast.broadcast_start()?;
+
+            log::info!("starting server on {}", opts.listen_address);
+
+            let server = outway::Server::new(org_tls_pair, rx);
+            server.run(opts.listen_address).await?;
         }
     }
 

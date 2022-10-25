@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::{io::Cursor, path::Path};
 
 use tokio::fs;
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
 use anyhow::Result;
+use x509_parser::prelude::Pem;
 
 // @TODO: do some validation
 pub struct TlsPair {
@@ -45,6 +46,17 @@ impl TlsPair {
         let key_pem = fs::read(key.as_ref()).await?;
 
         TlsPair::new(root_pem, cert_pem, key_pem)
+    }
+
+    pub fn public_key_pem(&self) -> Result<String> {
+        let (pem, _) = Pem::read(Cursor::new(&self.cert_pem))?;
+        let cert = pem.parse_x509()?;
+        let public_key = cert.public_key();
+
+        Ok(pem::encode(&pem::Pem {
+            tag: "PUBLIC KEY".to_string(),
+            contents: public_key.raw.to_vec(),
+        }))
     }
 }
 

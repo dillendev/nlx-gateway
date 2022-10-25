@@ -19,7 +19,10 @@ use crate::{
     },
 };
 
-use super::{Event, InwayConfig};
+use super::Config;
+
+const BROADCAST_INTERVAL: Duration = Duration::from_secs(10);
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn get_hostname() -> Result<String> {
     hostname::get()
@@ -29,9 +32,6 @@ fn get_hostname() -> Result<String> {
                 .map_err(|_| anyhow::anyhow!("hostname is not valid utf-8"))
         })
 }
-
-const BROADCAST_INTERVAL: Duration = Duration::from_secs(10);
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Broadcast {
     inway_name: String,
@@ -70,7 +70,7 @@ impl Broadcast {
         Ok(())
     }
 
-    async fn announce(&mut self, config: &InwayConfig) -> Result<()> {
+    async fn announce(&mut self, config: &Config) -> Result<()> {
         log::trace!("announcing services to directory");
 
         let mut request = Request::new(RegisterInwayRequest {
@@ -114,7 +114,7 @@ impl Broadcast {
         Ok(())
     }
 
-    async fn broadcast(&mut self, rx: &mut Receiver<Event>) -> Result<()> {
+    async fn broadcast(&mut self, rx: &mut Receiver<Config>) -> Result<()> {
         self.register_inway().await?;
         log::info!("inway registered");
 
@@ -132,10 +132,8 @@ impl Broadcast {
                     self.announce(inway_config.as_ref().unwrap()).await?;
                 }
                 result = rx.recv() => match result {
-                    Ok(event) => match event {
-                        Event::ConfigUpdated(config) => {
-                            inway_config = Some(config);
-                        }
+                    Ok(config) =>  {
+                        inway_config = Some(config);
                     }
                     // In this case we've missed some events so we should assume the `inway_config` is no longer valid
                     Err(RecvError::Lagged(num)) => {
@@ -151,7 +149,7 @@ impl Broadcast {
         }
     }
 
-    pub fn broadcast_start(mut self, mut rx: Receiver<Event>) -> Result<JoinHandle<()>> {
+    pub fn broadcast_start(mut self, mut rx: Receiver<Config>) -> Result<JoinHandle<()>> {
         log::info!("start broadcasting");
 
         Ok(tokio::spawn(async move {
