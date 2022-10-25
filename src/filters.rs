@@ -9,7 +9,7 @@ macro_rules! with_request {
             .and(warp::filters::path::tail())
             .and(optional_query)
             .and(warp::header::headers_cloned())
-            .and(warp::body::stream())
+            .and(warp::body::bytes())
             .map(|method, path: warp::path::Tail, query, headers, body| {
                 crate::reverse_proxy::Request::new(method, path, query, headers, body)
             })

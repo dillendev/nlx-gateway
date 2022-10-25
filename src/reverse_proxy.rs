@@ -1,6 +1,6 @@
 use std::fmt::{self, Display};
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use futures_util::{Stream, StreamExt};
 use http::{HeaderMap, Method};
 use reqwest::{Body, Client, Url};
@@ -48,20 +48,16 @@ pub enum IntoReqwestError {
 
 impl Reject for IntoReqwestError {}
 
-pub struct Request<B: Buf, S: Stream<Item = Result<B, warp::Error>>> {
+pub struct Request {
     method: Method,
     path: Tail,
     query: String,
     headers: HeaderMap,
-    body: S,
+    body: Bytes,
 }
 
-impl<B, S> Request<B, S>
-where
-    B: Buf,
-    S: Stream<Item = Result<B, warp::Error>> + Send + Sync + 'static,
-{
-    pub fn new(method: Method, path: Tail, query: String, headers: HeaderMap, body: S) -> Self {
+impl Request {
+    pub fn new(method: Method, path: Tail, query: String, headers: HeaderMap, body: Bytes) -> Self {
         Self {
             method,
             path,
@@ -90,11 +86,7 @@ where
 
         log::trace!("proxy request (request={:#?})", out);
 
-        let stream = self
-            .body
-            .map(|buf| buf.map(|mut buf| buf.copy_to_bytes(buf.remaining())));
-
-        out.body_mut().replace(Body::wrap_stream(stream));
+        out.body_mut().replace(Body::from(self.body));
 
         Ok(out)
     }
@@ -108,25 +100,13 @@ pub struct ReqwestError(reqwest::Error);
 
 impl Reject for ReqwestError {}
 
-impl<B, S> Display for Request<B, S>
-where
-    B: Buf,
-    S: Stream<Item = Result<B, warp::Error>>,
-{
+impl Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} /{}", self.method, self.path.as_str())
     }
 }
 
-pub async fn handle<B, S>(
-    http: Client,
-    request: Request<B, S>,
-    upstream: &str,
-) -> Result<Response, Rejection>
-where
-    B: Buf,
-    S: Stream<Item = Result<B, warp::Error>> + Send + Sync + 'static,
-{
+pub async fn handle(http: Client, request: Request, upstream: &str) -> Result<Response, Rejection> {
     let request = request.into_reqwest(upstream)?;
     let response = http
         .execute(request)
