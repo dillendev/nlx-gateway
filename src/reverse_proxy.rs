@@ -88,7 +88,7 @@ where
         // Remove the host header as it will be set automatically
         headers.remove("host");
 
-        log::trace!("proxy request (request={:?})", out);
+        log::trace!("proxy request (request={:#?})", out);
 
         let stream = self
             .body
@@ -135,7 +135,7 @@ where
     let status = response.status();
     let headers = response.headers().clone();
 
-    log::trace!("proxy response (response={:?})", response);
+    log::trace!("proxy response (response={:#?})", response);
 
     let mut proxied_response = Response::new(HyperBody::wrap_stream(response.bytes_stream()));
     copy_headers(headers, proxied_response.headers_mut());

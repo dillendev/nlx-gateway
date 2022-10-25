@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use reqwest::{Certificate, ClientBuilder, Identity};
 use tokio::sync::{
@@ -62,11 +62,12 @@ impl Server {
             .use_rustls_tls()
             .trust_dns(true)
             .http2_prior_knowledge()
-            .http1_only()
             .tls_built_in_root_certs(false)
             .add_root_certificate(ca_cert)
             .identity(identity)
             .https_only(true)
+            .http2_keep_alive_timeout(Duration::from_secs(60))
+            .tcp_keepalive(Duration::from_secs(60))
             .http2_adaptive_window(true)
             .http2_max_frame_size(16777215)
             .build()?;
@@ -75,10 +76,11 @@ impl Server {
         let route = warp::any()
             .and(with_config)
             .and(with_client)
-            .and(warp::path!(String / String))
+            .and(warp::path::param())
+            .and(warp::path::param())
             .and(with_request!())
             .and_then(
-                |config: OutwayConfig, client, oin, service_name, request| async move {
+                |config: OutwayConfig, client, oin: String, service_name: String, request| async move {
                     let inway_address = {
                         let lock = config.read().await;
                         let service = lock.services.get(&oin).and_then(|services| {
@@ -97,10 +99,15 @@ impl Server {
                     match inway_address {
                         Some(address) => {
                             log::debug!("proxy {}: {}", service_name, request);
+
+                            // Make sure the upstream endpoint has a trailing slash
+                            let mut upstream = [address, service_name].join("/");
+                            upstream.push('/');
+
                             reverse_proxy::handle(
                                 client,
                                 request,
-                                &[address, service_name].join("/"),
+                                &upstream,
                             )
                             .await
                             .map_err(|e| {
