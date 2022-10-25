@@ -9,13 +9,18 @@ edition = "2021"
 debug = true
 
 [dependencies]
-http = "0.2.8"
+pem = "1.1.0"
 url = "2.3.1"
+http = "0.2.8"
 log = "0.4.17"
 bytes = "1.2.1"
 prost = "0.11.0"
 anyhow = "1.0.65"
+wyhash2 = "0.2.1"
 hostname = "0.3.1"
+itertools = "0.10.5"
+x509-parser = "0.14.0"
+prost-types = "0.11.1"
 futures-util = "0.3.25"
 pretty_env_logger = "0.4.0"
 tokio = { version = "1.21.2", features = ["rt", "sync"] }
@@ -26,8 +31,9 @@ clap = { version = "4.0.17", features = ["derive", "env"] }
 tokio-util = { version = "0.7.4", default-features = false, features = ["compat"] }
 warp = { version = "0.3.3", features = ["tls"] }
 backoff = { version = "0.4.0", features = ["futures", "tokio"] }
-x509-parser = "0.14.0"
-pem = "1.1.0"
 
 [build-dependencies]
 tonic-build = "0.8.2"
+
+#[patch.crates-io]
+#h2 = { path = "/Users/dmeijboom/DevProjects/github/h2" }

@@ -1,7 +1,6 @@
 mod broadcast;
 mod config;
 mod config_poller;
-mod reverse_proxy;
 mod server;
 
 pub use broadcast::Broadcast;

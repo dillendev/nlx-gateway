@@ -7,15 +7,11 @@ use tokio::sync::{
     broadcast::{error::RecvError, Receiver},
     RwLock,
 };
-use warp::{path::Tail, Filter};
+use warp::Filter;
 
-use crate::tls::TlsPair;
+use crate::{filters::with_request, reverse_proxy, tls::TlsPair};
 
-use super::{
-    config,
-    reverse_proxy::{self, Request},
-    Config,
-};
+use super::{config, Config};
 
 type InwayConfig = Arc<RwLock<config::Config>>;
 
@@ -63,28 +59,17 @@ impl Server {
             .use_rustls_tls()
             .trust_dns(true)
             .http2_adaptive_window(true)
+            .http2_max_frame_size(16777215)
             .build()?;
         let with_config = warp::any().map(move || Arc::clone(&config));
         let with_client = warp::any().map(move || client.clone());
-        let optional_query = warp::filters::query::raw()
-            .or(warp::any().map(String::default))
-            .unify();
-        let with_request = warp::any()
-            .and(warp::method())
-            .and(warp::filters::path::tail())
-            .and(optional_query)
-            .and(warp::header::headers_cloned())
-            .and(warp::body::stream())
-            .map(|method, path: Tail, query, headers, body| {
-                Request::new(method, path, query, headers, body)
-            });
 
         // Setup routes
         let proxy = warp::any()
             .and(with_config.clone())
             .and(with_client)
             .and(warp::path::param())
-            .and(with_request)
+            .and(with_request!())
             .and_then(
                 |config: InwayConfig, client, service: String, request| async move {
                     let upstream = {
@@ -99,7 +84,12 @@ impl Server {
                     match upstream {
                         Some(upstream) => {
                             log::debug!("proxy {}: {}", service, request);
-                            reverse_proxy::handle(client, request, &upstream).await
+                            reverse_proxy::handle(client, request, &upstream)
+                                .await
+                                .map_err(|e| {
+                                    log::error!("proxy failed: {:?}", e);
+                                    e
+                                })
                         }
                         None => Err(warp::reject::not_found()),
                     }

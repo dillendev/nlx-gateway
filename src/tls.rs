@@ -23,10 +23,7 @@ impl TlsPair {
     }
 
     pub fn bundle(&self) -> Vec<u8> {
-        let mut bundle = self.cert_pem.clone();
-        bundle.push(b'\n');
-        bundle.extend_from_slice(&self.root_pem);
-        bundle
+        pem_bundle(&self.cert_pem, &self.root_pem)
     }
 
     pub fn client_config(&self) -> ClientTlsConfig {
@@ -67,4 +64,11 @@ pub async fn client_config(
 ) -> Result<ClientTlsConfig> {
     let pair = TlsPair::from_files(root, client_cert, client_key).await?;
     Ok(pair.client_config())
+}
+
+pub fn pem_bundle(item1: &[u8], item2: &[u8]) -> Vec<u8> {
+    let mut bundle = item1.to_vec();
+    bundle.push(b'\n');
+    bundle.extend_from_slice(item2);
+    bundle
 }

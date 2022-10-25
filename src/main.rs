@@ -11,13 +11,14 @@ use tls::TlsPair;
 use tokio::sync::broadcast::channel;
 use tonic::transport::{Channel, ClientTlsConfig};
 
-use crate::inway::ConfigPoller;
 use crate::poller::Poller;
 
 mod backoff;
+mod filters;
 mod inway;
 mod outway;
 mod poller;
+mod reverse_proxy;
 mod tls;
 
 pub mod pb {
@@ -116,7 +117,7 @@ async fn main() -> Result<()> {
             let rx2 = tx.subscribe();
 
             let poller = Poller::new(
-                ConfigPoller::new(management.clone(), opts.name.clone()),
+                inway::ConfigPoller::new(management.clone(), opts.name.clone()),
                 Duration::from_secs(10),
             );
             poller.poll_start(tx);
@@ -131,8 +132,14 @@ async fn main() -> Result<()> {
             server.run(opts.listen_address).await?;
         }
         Cmd::Outway(opts) => {
-            // Parse public key (of the organization) from the certificate
-            let (_tx, rx) = channel(10);
+            let (tx, rx) = channel(10);
+
+            let poller = Poller::new(
+                outway::ConfigPoller::new(directory.clone()),
+                Duration::from_secs(10),
+            );
+            poller.poll_start(tx);
+
             let broadcast = outway::Broadcast::new(
                 management,
                 directory,

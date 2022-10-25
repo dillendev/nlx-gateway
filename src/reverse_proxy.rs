@@ -12,7 +12,6 @@ use warp::{
     Rejection,
 };
 
-#[inline]
 fn is_hop_header(name: &str) -> bool {
     matches!(
         name,
@@ -43,9 +42,11 @@ fn copy_headers(headers: HeaderMap, dest: &mut HeaderMap) {
 }
 
 #[derive(Debug)]
-pub struct UrlParseError(ParseError);
+pub enum IntoReqwestError {
+    UrlParseError(ParseError),
+}
 
-impl Reject for UrlParseError {}
+impl Reject for IntoReqwestError {}
 
 pub struct Request<B: Buf, S: Stream<Item = Result<B, warp::Error>>> {
     method: Method,
@@ -73,7 +74,7 @@ where
     pub fn into_reqwest(self, upstream: &str) -> Result<reqwest::Request, Rejection> {
         let mut url = Url::parse(upstream)
             .and_then(|url| url.join(self.path.as_str()))
-            .map_err(|e| reject::custom(UrlParseError(e)))?;
+            .map_err(|e| reject::custom(IntoReqwestError::UrlParseError(e)))?;
 
         if !self.query.is_empty() {
             url.set_query(Some(self.query.as_str()));
@@ -83,6 +84,11 @@ where
 
         let headers = out.headers_mut();
         copy_headers(self.headers, headers);
+
+        // Remove the host header as it will be set automatically
+        headers.remove("host");
+
+        log::trace!("proxy request (request={:?})", out);
 
         let stream = self
             .body
@@ -129,10 +135,12 @@ where
     let status = response.status();
     let headers = response.headers().clone();
 
-    let mut proxy_response = Response::new(HyperBody::wrap_stream(response.bytes_stream()));
-    copy_headers(headers, proxy_response.headers_mut());
+    log::trace!("proxy response (response={:?})", response);
 
-    *proxy_response.status_mut() = status;
+    let mut proxied_response = Response::new(HyperBody::wrap_stream(response.bytes_stream()));
+    copy_headers(headers, proxied_response.headers_mut());
 
-    Ok(proxy_response)
+    *proxied_response.status_mut() = status;
+
+    Ok(proxied_response)
 }

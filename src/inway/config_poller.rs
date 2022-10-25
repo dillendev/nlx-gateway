@@ -43,16 +43,16 @@ fn map_config(response: GetInwayConfigResponse) -> Config {
 
 pub struct ConfigPoller {
     inway_name: String,
-    management: ManagementClient<Channel>,
     config_hash: Option<u64>,
+    management: ManagementClient<Channel>,
 }
 
 impl ConfigPoller {
     pub fn new(management: ManagementClient<Channel>, inway_name: String) -> Self {
         ConfigPoller {
             management,
-            inway_name,
             config_hash: None,
+            inway_name,
         }
     }
 }
