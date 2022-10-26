@@ -1,0 +1,15 @@
+kind: pipeline
+type: kubernetes
+name: nlx-gateway
+steps:
+  - name: build
+    image: dmeijboom/drone-kaniko:latest
+    settings:
+      registry: ghcr.io
+      repo: dillendev/nlx-gateway
+      tags: ${DRONE_COMMIT_SHA:0:7}
+      container_runtime: kube
+      username:
+        from_secret: docker_username
+      password:
+        from_secret: docker_password
