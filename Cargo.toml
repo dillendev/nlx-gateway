@@ -24,7 +24,7 @@ prost-types = "0.11.1"
 futures-util = "0.3.25"
 async-channel = "1.7.1"
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.21.2", features = ["rt", "sync"] }
+tokio = { version = "1.21.2", features = ["rt", "sync", "rt-multi-thread"] }
 serde = { version = "1.0.145", features = ["derive"] }
 tonic = { version = "0.8.2", features = ["tls", "gzip"] }
 clap = { version = "4.0.17", features = ["derive", "env"] }
@@ -32,7 +32,8 @@ tokio-util = { version = "0.7.4", default-features = false, features = ["compat"
 warp = { version = "0.3.3", features = ["tls"] }
 backoff = { version = "0.4.0", features = ["futures", "tokio"] }
 hyper = { version = "0.14.20", features = ["full"] }
-reqwest = { version = "0.11.12", features = ["stream", "rustls-tls", "trust-dns", "gzip", "brotli", "deflate", "multipart"], default-features = false }
+hyper-rustls = { version = "0.23.0", features = ["http2"] }
+rustls = "0.20.7"
 
 [build-dependencies]
 tonic-build = "0.8.2"

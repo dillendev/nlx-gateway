@@ -1,15 +1,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use async_channel::Receiver;
-use reqwest::{Certificate, ClientBuilder, Identity, Url};
+use hyper::Client;
+use hyper_rustls::HttpsConnectorBuilder;
+use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore};
 use tokio::sync::RwLock;
 use warp::Filter;
 
-use crate::{
-    filters::with_request,
-    reverse_proxy,
-    tls::{self, TlsPair},
-};
+use crate::{filters::with_request, reverse_proxy, tls::TlsPair};
 
 use super::{config::ServiceInways, Config};
 
@@ -32,13 +30,7 @@ async fn handle_events(state: ServiceInwaysState, rx: Receiver<Config>) {
                                     let services = service
                                         .inways
                                         .first()
-                                        .and_then(|inway| {
-                                            Url::parse(&format!(
-                                                "{}{}/",
-                                                inway.address, service.name
-                                            ))
-                                            .ok()
-                                        })
+                                        .map(|inway| format!("{}{}/", inway.address, service.name))
                                         .map(Arc::new);
 
                                     (service.name, services)
@@ -74,21 +66,31 @@ impl Server {
         // Handle config changes
         tokio::spawn(handle_events(Arc::clone(&config), self.rx));
 
-        let ca_cert = Certificate::from_pem(&self.tls_pair.root_pem)?;
-        let bundle = tls::pem_bundle(&self.tls_pair.cert_pem, &self.tls_pair.key_pem);
-        let identity = Identity::from_pem(&bundle)?;
+        let cert_bundle_der = pem::parse_many(self.tls_pair.bundle())?
+            .into_iter()
+            .map(|pem| Certificate(pem.contents))
+            .collect::<Vec<_>>();
+        let key_der = pem::parse(self.tls_pair.key_pem)?.contents;
 
-        // Build warp filters
-        let client = ClientBuilder::new()
-            .use_rustls_tls()
-            .trust_dns(true)
-            .http2_prior_knowledge()
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(ca_cert)
-            .identity(identity)
-            .https_only(true)
+        let ca_cert_der = Certificate(pem::parse(self.tls_pair.root_pem)?.contents);
+        let mut store = RootCertStore::empty();
+        store.add(&ca_cert_der)?;
+
+        let tls_config = ClientConfig::builder()
+            .with_safe_default_cipher_suites()
+            .with_safe_default_kx_groups()
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(store)
+            .with_single_cert(cert_bundle_der, PrivateKey(key_der))?;
+        let https = HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_http2()
+            .build();
+        let client = Client::builder()
             .http2_adaptive_window(true)
-            .build()?;
+            .http2_only(true)
+            .build(https);
         let with_config = warp::any().map(move || Arc::clone(&config));
         let with_client = warp::any().map(move || client.clone());
         let route =

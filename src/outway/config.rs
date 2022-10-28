@@ -1,6 +1,5 @@
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
-use reqwest::Url;
 use wyhash2::WyHash;
 
 #[derive(Debug, Clone, Hash, PartialEq)]
@@ -66,4 +65,4 @@ impl Hash for Config {
 }
 
 /// Maps an OIN to services to an Inway endpoint
-pub type ServiceInways = HashMap<String, HashMap<String, Option<Arc<Url>>>>;
+pub type ServiceInways = HashMap<String, HashMap<String, Option<Arc<String>>>>;

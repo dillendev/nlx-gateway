@@ -1,7 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use async_channel::Receiver;
-use reqwest::{ClientBuilder, Url};
+use hyper::Client;
+use hyper_rustls::HttpsConnectorBuilder;
 
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -21,9 +22,7 @@ async fn handle_events(state: ServiceInwayMapState, rx: Receiver<Config>) {
                 *lock = new_config
                     .services
                     .into_iter()
-                    .map(|(name, service)| {
-                        (name, Url::parse(&service.endpoint_url).ok().map(Arc::new))
-                    })
+                    .map(|(name, service)| (name, Arc::new(service.endpoint_url)))
                     .collect();
 
                 log::info!("inway config updated");
@@ -59,11 +58,13 @@ impl Server {
         tokio::spawn(handle_events(Arc::clone(&state), self.rx));
 
         // Build warp filters
-        let client = ClientBuilder::new()
-            .use_rustls_tls()
-            .trust_dns(true)
-            .http2_adaptive_window(true)
-            .build()?;
+        let https = HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+        let client = Client::builder().http2_adaptive_window(true).build(https);
         let with_state = warp::any().map(move || Arc::clone(&state));
         let with_client = warp::any().map(move || client.clone());
 
@@ -75,16 +76,10 @@ impl Server {
             .and(with_request!())
             .and_then(
                 |state: ServiceInwayMapState, client, service: String, request| async move {
-                    let upstream = {
-                        state
-                            .read()
-                            .await
-                            .get(&service)
-                            .map(|endpoint| endpoint.as_ref().map(Arc::clone))
-                    };
+                    let upstream = { state.read().await.get(&service).map(Arc::clone) };
 
                     match upstream {
-                        Some(Some(upstream)) => {
+                        Some(upstream) => {
                             log::debug!("proxy {}: {}", service, request);
                             reverse_proxy::handle(client, request, &upstream)
                                 .await
@@ -92,10 +87,6 @@ impl Server {
                                     log::error!("proxy failed: {:?}", e);
                                     e
                                 })
-                        }
-                        Some(None) => {
-                            log::warn!("service {} has an invalid endpoint", service);
-                            Err(warp::reject::not_found())
                         }
                         None => Err(warp::reject::not_found()),
                     }
