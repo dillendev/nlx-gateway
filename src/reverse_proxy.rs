@@ -1,7 +1,6 @@
 use std::fmt::{self, Display};
 
-use bytes::{Buf, Bytes};
-use futures_util::{Stream, StreamExt};
+use bytes::Bytes;
 use http::{HeaderMap, Method};
 use reqwest::{Body, Client, Url};
 use url::ParseError;
@@ -12,32 +11,23 @@ use warp::{
     Rejection,
 };
 
-fn is_hop_header(name: &str) -> bool {
-    matches!(
-        name,
-        "Connection"
-            | "Keep-Alive"
-            | "Proxy-Authenticate"
-            | "Proxy-Authorization"
-            | "TE"
-            | "Trailers"
-            | "Transfer-Encoding"
-            | "Upgrade"
-    )
-}
+const HOP_HEADERS: [&str; 8] = [
+    "Connection",
+    "Keep-Alive",
+    "Proxy-Authenticate",
+    "Proxy-Authorization",
+    "TE",
+    "Trailers",
+    "Transfer-Encoding",
+    "Upgrade",
+];
 
+#[inline]
 fn copy_headers(headers: HeaderMap, dest: &mut HeaderMap) {
-    let mut header_name = None;
+    *dest = headers;
 
-    for (name, value) in headers {
-        let name = name.or_else(|| header_name.clone()).unwrap();
-
-        if is_hop_header(name.as_str()) {
-            continue;
-        }
-
-        dest.append(name.clone(), value);
-        header_name = Some(name);
+    for header in HOP_HEADERS {
+        dest.remove(header);
     }
 }
 
@@ -67,9 +57,9 @@ impl Request {
         }
     }
 
-    pub fn into_reqwest(self, upstream: &str) -> Result<reqwest::Request, Rejection> {
-        let mut url = Url::parse(upstream)
-            .and_then(|url| url.join(self.path.as_str()))
+    pub fn into_reqwest(self, upstream: &Url) -> Result<reqwest::Request, Rejection> {
+        let mut url = upstream
+            .join(self.path.as_str())
             .map_err(|e| reject::custom(IntoReqwestError::UrlParseError(e)))?;
 
         if !self.query.is_empty() {
@@ -92,9 +82,6 @@ impl Request {
     }
 }
 
-// Instead of depending on `hyper` directly, use the exported `Body` struct from the `tonic` crate
-type HyperBody = tonic::transport::Body;
-
 #[derive(Debug)]
 pub struct ReqwestError(reqwest::Error);
 
@@ -106,7 +93,7 @@ impl Display for Request {
     }
 }
 
-pub async fn handle(http: Client, request: Request, upstream: &str) -> Result<Response, Rejection> {
+pub async fn handle(http: Client, request: Request, upstream: &Url) -> Result<Response, Rejection> {
     let request = request.into_reqwest(upstream)?;
     let response = http
         .execute(request)
@@ -117,7 +104,7 @@ pub async fn handle(http: Client, request: Request, upstream: &str) -> Result<Re
 
     log::trace!("proxy response (response={:#?})", response);
 
-    let mut proxied_response = Response::new(HyperBody::wrap_stream(response.bytes_stream()));
+    let mut proxied_response = Response::new(hyper::Body::wrap_stream(response.bytes_stream()));
     copy_headers(headers, proxied_response.headers_mut());
 
     *proxied_response.status_mut() = status;

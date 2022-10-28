@@ -1,10 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
-use reqwest::{Certificate, ClientBuilder, Identity};
-use tokio::sync::{
-    broadcast::{error::RecvError, Receiver},
-    RwLock,
-};
+use async_channel::Receiver;
+use reqwest::{Certificate, ClientBuilder, Identity, Url};
+use tokio::sync::RwLock;
 use warp::Filter;
 
 use crate::{
@@ -13,26 +11,49 @@ use crate::{
     tls::{self, TlsPair},
 };
 
-use super::{
-    config::{self},
-    Config,
-};
+use super::{config::ServiceInways, Config};
 
-type OutwayConfig = Arc<RwLock<config::Config>>;
+type ServiceInwaysState = Arc<RwLock<ServiceInways>>;
 
-async fn handle_events(config: OutwayConfig, mut rx: Receiver<Config>) {
+async fn handle_events(state: ServiceInwaysState, rx: Receiver<Config>) {
     loop {
         match rx.recv().await {
             Ok(new_config) => {
-                let mut lock = config.write().await;
-                *lock = new_config;
+                let mut lock = state.write().await;
+                *lock = new_config
+                    .services
+                    .into_iter()
+                    .map(|(oin, services)| {
+                        (
+                            oin,
+                            services
+                                .into_iter()
+                                .map(|service| {
+                                    let services = service
+                                        .inways
+                                        .first()
+                                        .and_then(|inway| {
+                                            Url::parse(&format!(
+                                                "{}{}/",
+                                                inway.address, service.name
+                                            ))
+                                            .ok()
+                                        })
+                                        .map(Arc::new);
+
+                                    (service.name, services)
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect();
 
                 log::info!("outway config updated");
             }
-            Err(RecvError::Lagged(num)) => {
-                log::warn!("server is lagging, missed {} outway events", num);
+            Err(_) => {
+                log::debug!("config channel closed");
+                break;
             }
-            Err(RecvError::Closed) => break,
         }
     }
 }
@@ -48,7 +69,7 @@ impl Server {
     }
 
     pub async fn run(self, addr: SocketAddr) -> anyhow::Result<()> {
-        let config = OutwayConfig::default();
+        let config = ServiceInwaysState::default();
 
         // Handle config changes
         tokio::spawn(handle_events(Arc::clone(&config), self.rx));
@@ -66,59 +87,51 @@ impl Server {
             .add_root_certificate(ca_cert)
             .identity(identity)
             .https_only(true)
-            .http2_keep_alive_timeout(Duration::from_secs(60))
-            .tcp_keepalive(Duration::from_secs(60))
             .http2_adaptive_window(true)
-            .http2_max_frame_size(16777215)
             .build()?;
         let with_config = warp::any().map(move || Arc::clone(&config));
         let with_client = warp::any().map(move || client.clone());
-        let route = warp::any()
-            .and(with_config)
-            .and(with_client)
-            .and(warp::path::param())
-            .and(warp::path::param())
-            .and(with_request!())
-            .and_then(
-                |config: OutwayConfig, client, oin: String, service_name: String, request| async move {
-                    let inway_address = {
-                        let lock = config.read().await;
-                        let service = lock.services.get(&oin).and_then(|services| {
-                            services.iter().find(|service| service.name == service_name)
-                        });
-
-                        service.and_then(|s| {
-                            s.inways
-                                .first()
-                                // @TODO: re-enable this when the Inway monitoring stuff works
-                                //.find(|inway| inway.state == State::Up)
-                                .map(|inway| inway.address.clone())
-                        })
-                    };
-
-                    match inway_address {
-                        Some(address) => {
-                            log::debug!("proxy {}: {}", service_name, request);
-
-                            // Make sure the upstream endpoint has a trailing slash
-                            let mut upstream = [address, service_name].join("/");
-                            upstream.push('/');
-
-                            reverse_proxy::handle(
-                                client,
-                                request,
-                                &upstream,
-                            )
-                            .await
-                            .map_err(|e| {
-                                log::error!("proxy failed: {:?}", e);
-                                e
+        let route =
+            warp::any()
+                .and(with_config)
+                .and(with_client)
+                .and(warp::path::param())
+                .and(warp::path::param())
+                .and(with_request!())
+                .and_then(
+                    |state: ServiceInwaysState,
+                     client,
+                     oin: String,
+                     service: String,
+                     request| async move {
+                        let upstream = {
+                            let lock = state.read().await;
+                            lock.get(&oin).and_then(|services| {
+                                services
+                                    .get(&service)
+                                    .map(|endpoint| endpoint.as_ref().map(Arc::clone))
                             })
+                        };
+
+                        match upstream {
+                            Some(Some(upstream)) => {
+                                log::debug!("proxy {}: {}", service, request);
+
+                                reverse_proxy::handle(client, request, &upstream)
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("proxy failed: {:?}", e);
+                                        e
+                                    })
+                            }
+                            Some(None) => {
+                                log::warn!("service {} has an invalid endpoint", service);
+                                Err(warp::reject::not_found())
+                            }
+                            None => Err(warp::reject::not_found()),
                         }
-                        None => Err(warp::reject::not_found()),
-                    }
-                },
-            );
+                    },
+                );
 
         warp::serve(route).run(addr).await;
 

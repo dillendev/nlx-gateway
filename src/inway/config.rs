@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use reqwest::Url;
 
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -26,3 +29,6 @@ pub struct Service {
     pub monthly_costs: i32,
     pub request_costs: i32,
 }
+
+/// Maps a service name to an HTTP endpoint
+pub type ServiceInwayMap = HashMap<String, Option<Arc<Url>>>;

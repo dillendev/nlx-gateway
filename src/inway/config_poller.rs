@@ -4,7 +4,8 @@ use std::{
 };
 
 use anyhow::Result;
-use tokio::sync::broadcast::Sender;
+use async_channel::Sender;
+use futures_util::future::try_join_all;
 use tonic::{async_trait, transport::Channel};
 
 use crate::{
@@ -45,6 +46,7 @@ pub struct ConfigPoller {
     inway_name: String,
     config_hash: Option<u64>,
     management: ManagementClient<Channel>,
+    subscribers: Vec<Sender<Config>>,
 }
 
 impl ConfigPoller {
@@ -53,15 +55,18 @@ impl ConfigPoller {
             management,
             config_hash: None,
             inway_name,
+            subscribers: vec![],
         }
+    }
+
+    pub fn subscribe(&mut self, tx: Sender<Config>) {
+        self.subscribers.push(tx);
     }
 }
 
 #[async_trait]
 impl Poll for ConfigPoller {
-    type Event = Config;
-
-    async fn poll(&mut self, tx: &mut Sender<Config>) -> Result<()> {
+    async fn poll(&mut self) -> Result<()> {
         log::trace!("retrieving config from management API");
 
         let response = self
@@ -78,7 +83,13 @@ impl Poll for ConfigPoller {
 
         if self.config_hash != Some(new_hash) {
             log::debug!("config changed");
-            tx.send(config)?;
+
+            try_join_all(
+                self.subscribers
+                    .iter_mut()
+                    .map(|tx| tx.send(config.clone())),
+            )
+            .await?;
 
             self.config_hash = Some(new_hash);
         }

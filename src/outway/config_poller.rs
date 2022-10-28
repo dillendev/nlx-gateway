@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::Result;
+use async_channel::Sender;
 use itertools::Itertools;
-use tokio::sync::broadcast::Sender;
 use tonic::{async_trait, transport::Channel};
 
 use crate::{
@@ -18,10 +18,15 @@ use super::{
     Config,
 };
 
-fn normalize_address(address: String) -> String {
+fn normalize_address(mut address: String) -> String {
     if !address.contains("://") {
         // @TODO: assume HTTPS?
-        return format!("https://{}", address);
+        address = format!("https://{}", address);
+    }
+
+    // To make sure reqwest can handle this properly
+    if !address.ends_with('/') {
+        address.push('/');
     }
 
     address
@@ -82,13 +87,15 @@ fn map_config(response: ListServicesResponse) -> Config {
 }
 
 pub struct ConfigPoller {
+    tx: Sender<Config>,
     config_hash: Option<u64>,
     directory: DirectoryClient<Channel>,
 }
 
 impl ConfigPoller {
-    pub fn new(directory: DirectoryClient<Channel>) -> Self {
+    pub fn new(directory: DirectoryClient<Channel>, tx: Sender<Config>) -> Self {
         Self {
+            tx,
             config_hash: None,
             directory,
         }
@@ -97,9 +104,7 @@ impl ConfigPoller {
 
 #[async_trait]
 impl Poll for ConfigPoller {
-    type Event = Config;
-
-    async fn poll(&mut self, tx: &mut Sender<Config>) -> Result<()> {
+    async fn poll(&mut self) -> Result<()> {
         log::trace!("retrieving config from directory");
 
         let response = self.directory.list_services(ListServicesRequest {}).await?;
@@ -111,7 +116,7 @@ impl Poll for ConfigPoller {
 
         if Some(new_hash) != self.config_hash {
             log::debug!("config changed");
-            tx.send(config)?;
+            self.tx.send(config).await?;
             self.config_hash = Some(new_hash);
         }
 

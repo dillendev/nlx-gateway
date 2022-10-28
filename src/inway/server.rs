@@ -1,33 +1,37 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use reqwest::ClientBuilder;
+use async_channel::Receiver;
+use reqwest::{ClientBuilder, Url};
 
 use serde::Serialize;
-use tokio::sync::{
-    broadcast::{error::RecvError, Receiver},
-    RwLock,
-};
+use tokio::sync::RwLock;
 use warp::Filter;
 
 use crate::{filters::with_request, reverse_proxy, tls::TlsPair};
 
-use super::{config, Config};
+use super::{config::ServiceInwayMap, Config};
 
-type InwayConfig = Arc<RwLock<config::Config>>;
+type ServiceInwayMapState = Arc<RwLock<ServiceInwayMap>>;
 
-async fn handle_events(config: InwayConfig, mut rx: Receiver<Config>) {
+async fn handle_events(state: ServiceInwayMapState, rx: Receiver<Config>) {
     loop {
         match rx.recv().await {
             Ok(new_config) => {
-                let mut lock = config.write().await;
-                *lock = new_config;
+                let mut lock = state.write().await;
+                *lock = new_config
+                    .services
+                    .into_iter()
+                    .map(|(name, service)| {
+                        (name, Url::parse(&service.endpoint_url).ok().map(Arc::new))
+                    })
+                    .collect();
 
                 log::info!("inway config updated");
             }
-            Err(RecvError::Lagged(num)) => {
-                log::warn!("server is lagging, missed {} inway events", num);
+            Err(_) => {
+                log::debug!("config channel closed");
+                break;
             }
-            Err(RecvError::Closed) => break,
         }
     }
 }
@@ -49,40 +53,38 @@ impl Server {
     }
 
     pub async fn run(self, addr: SocketAddr) -> anyhow::Result<()> {
-        let config = InwayConfig::default();
+        let state = ServiceInwayMapState::default();
 
         // Handle config changes
-        tokio::spawn(handle_events(Arc::clone(&config), self.rx));
+        tokio::spawn(handle_events(Arc::clone(&state), self.rx));
 
         // Build warp filters
         let client = ClientBuilder::new()
             .use_rustls_tls()
             .trust_dns(true)
             .http2_adaptive_window(true)
-            .http2_max_frame_size(16777215)
             .build()?;
-        let with_config = warp::any().map(move || Arc::clone(&config));
+        let with_state = warp::any().map(move || Arc::clone(&state));
         let with_client = warp::any().map(move || client.clone());
 
         // Setup routes
         let proxy = warp::any()
-            .and(with_config.clone())
+            .and(with_state.clone())
             .and(with_client)
             .and(warp::path::param())
             .and(with_request!())
             .and_then(
-                |config: InwayConfig, client, service: String, request| async move {
+                |state: ServiceInwayMapState, client, service: String, request| async move {
                     let upstream = {
-                        config
+                        state
                             .read()
                             .await
-                            .services
                             .get(&service)
-                            .map(|svc| svc.endpoint_url.clone())
+                            .map(|endpoint| endpoint.as_ref().map(Arc::clone))
                     };
 
                     match upstream {
-                        Some(upstream) => {
+                        Some(Some(upstream)) => {
                             log::debug!("proxy {}: {}", service, request);
                             reverse_proxy::handle(client, request, &upstream)
                                 .await
@@ -91,6 +93,10 @@ impl Server {
                                     e
                                 })
                         }
+                        Some(None) => {
+                            log::warn!("service {} has an invalid endpoint", service);
+                            Err(warp::reject::not_found())
+                        }
                         None => Err(warp::reject::not_found()),
                     }
                 },
@@ -98,10 +104,10 @@ impl Server {
         let health = warp::get()
             .and(warp::path(".nlx"))
             .and(warp::path("health"))
-            .and(with_config)
+            .and(with_state)
             .and(warp::path::param())
-            .then(|config: InwayConfig, service: String| async move {
-                let healthy = { config.read().await.services.contains_key(&service) };
+            .then(|state: ServiceInwayMapState, service: String| async move {
+                let healthy = { state.read().await.contains_key(&service) };
 
                 warp::reply::json(&Health {
                     healthy,

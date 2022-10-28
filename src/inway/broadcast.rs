@@ -1,11 +1,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::{
-    sync::broadcast::{error::RecvError, Receiver},
-    task::JoinHandle,
-    time,
-};
+use async_channel::Receiver;
+use tokio::{task::JoinHandle, time};
 use tonic::{transport::Channel, Request};
 
 use crate::{
@@ -135,12 +132,7 @@ impl Broadcast {
                     Ok(config) =>  {
                         inway_config = Some(config);
                     }
-                    // In this case we've missed some events so we should assume the `inway_config` is no longer valid
-                    Err(RecvError::Lagged(num)) => {
-                        log::warn!("broadcast is lagging, missed {} inway events", num);
-                        inway_config = None;
-                    }
-                    Err(RecvError::Closed) => {
+                    Err(_) => {
                         log::info!("broadcast channel closed");
                         return Ok(());
                     }
@@ -149,10 +141,10 @@ impl Broadcast {
         }
     }
 
-    pub fn broadcast_start(mut self, mut rx: Receiver<Config>) -> Result<JoinHandle<()>> {
+    pub fn broadcast_start(mut self, mut rx: Receiver<Config>) -> JoinHandle<()> {
         log::info!("start broadcasting");
 
-        Ok(tokio::spawn(async move {
+        tokio::spawn(async move {
             retry_backoff!(
                 self.broadcast(&mut rx),
                 |err, duration: Duration| log::warn!(
@@ -161,6 +153,6 @@ impl Broadcast {
                     duration.as_secs()
                 )
             );
-        }))
+        })
     }
 }
