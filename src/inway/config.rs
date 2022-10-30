@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use wyhash2::WyHash;
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub services: HashMap<String, Service>,
@@ -29,4 +31,4 @@ pub struct Service {
 }
 
 /// Maps a service name to an HTTP endpoint
-pub type ServiceInwayMap = HashMap<String, Arc<String>>;
+pub type ServiceInwayMap = HashMap<String, Arc<String>, WyHash>;

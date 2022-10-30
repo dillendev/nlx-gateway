@@ -67,7 +67,11 @@ impl Request {
         let url = format!("{}{}?{}", upstream, self.path.as_str(), self.query);
         let url = Uri::from_str(&url).map_err(IntoRequestError::InvalidUri)?;
 
-        let mut out = hyper::Request::new(Body::from(self.body));
+        let mut out = hyper::Request::new(if self.method == Method::GET {
+            Body::empty()
+        } else {
+            Body::from(self.body)
+        });
 
         *out.method_mut() = self.method;
         *out.uri_mut() = url;

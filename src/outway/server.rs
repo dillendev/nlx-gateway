@@ -90,6 +90,7 @@ impl Server {
         let client = Client::builder()
             .http2_adaptive_window(true)
             .http2_only(true)
+            .retry_canceled_requests(true)
             .build(https);
         let with_config = warp::any().map(move || Arc::clone(&config));
         let with_client = warp::any().map(move || client.clone());

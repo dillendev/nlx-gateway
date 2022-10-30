@@ -64,7 +64,10 @@ impl Server {
             .enable_http1()
             .enable_http2()
             .build();
-        let client = Client::builder().http2_adaptive_window(true).build(https);
+        let client = Client::builder()
+            .retry_canceled_requests(true)
+            .http2_adaptive_window(true)
+            .build(https);
         let with_state = warp::any().map(move || Arc::clone(&state));
         let with_client = warp::any().map(move || client.clone());
 

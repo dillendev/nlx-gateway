@@ -65,4 +65,4 @@ impl Hash for Config {
 }
 
 /// Maps an OIN to services to an Inway endpoint
-pub type ServiceInways = HashMap<String, HashMap<String, Option<Arc<String>>>>;
+pub type ServiceInways = HashMap<String, HashMap<String, Option<Arc<String>>, WyHash>, WyHash>;
