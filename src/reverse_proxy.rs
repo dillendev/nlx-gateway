@@ -129,16 +129,11 @@ impl Display for Request {
     }
 }
 
+#[inline(always)]
 fn is_h2_goaway_no_error(e: &hyper::Error) -> bool {
-    if let Some(source) = e.source() {
-        if let Some(e) = source.downcast_ref::<h2::Error>() {
-            if e.is_go_away() && e.is_remote() && e.reason() == Some(h2::Reason::NO_ERROR) {
-                return true;
-            }
-        }
-    }
-
-    false
+    matches!(e
+        .source()
+        .and_then(|source| source.downcast_ref::<h2::Error>()), Some(e) if e.is_go_away() && e.is_remote() && e.reason() == Some(h2::Reason::NO_ERROR))
 }
 
 pub async fn handle<C>(

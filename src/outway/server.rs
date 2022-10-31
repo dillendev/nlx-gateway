@@ -76,15 +76,16 @@ impl Server {
         let mut store = RootCertStore::empty();
         store.add(&ca_cert_der)?;
 
-        let tls_config = ClientConfig::builder()
+        let mut tls_config = ClientConfig::builder()
             .with_safe_default_cipher_suites()
             .with_safe_default_kx_groups()
             .with_safe_default_protocol_versions()?
             .with_root_certificates(store)
             .with_single_cert(cert_bundle_der, PrivateKey(key_der))?;
+        tls_config.enable_early_data = true;
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
-            .https_or_http()
+            .https_only()
             .enable_http2()
             .build();
         let client = Client::builder()

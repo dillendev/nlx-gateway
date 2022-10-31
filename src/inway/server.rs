@@ -2,8 +2,9 @@ use std::{net::SocketAddr, sync::Arc};
 
 use async_channel::Receiver;
 use hyper::Client;
-use hyper_rustls::HttpsConnectorBuilder;
+use hyper_rustls::{ConfigBuilderExt, HttpsConnectorBuilder};
 
+use rustls::ClientConfig;
 use serde::Serialize;
 use tokio::sync::RwLock;
 use warp::Filter;
@@ -58,8 +59,13 @@ impl Server {
         tokio::spawn(handle_events(Arc::clone(&state), self.rx));
 
         // Build warp filters
-        let https = HttpsConnectorBuilder::new()
+        let mut tls_config = ClientConfig::builder()
+            .with_safe_defaults()
             .with_native_roots()
+            .with_no_client_auth();
+        tls_config.enable_early_data = true;
+        let https = HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
             .https_or_http()
             .enable_http1()
             .enable_http2()
