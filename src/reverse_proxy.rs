@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{uri::InvalidUri, HeaderMap, Method, Uri};
+use http::{uri::InvalidUri, HeaderMap, Method, Uri, header::HeaderName};
 use hyper::{client::connect::Connect, Body, Client};
 use warp::{
     path::Tail,
@@ -15,20 +15,21 @@ use warp::{
 };
 
 const MAX_RETRIES: usize = 3;
-const HOP_HEADERS: [&str; 8] = [
-    "Connection",
-    "Keep-Alive",
-    "Proxy-Authenticate",
-    "Proxy-Authorization",
-    "TE",
-    "Trailers",
-    "Transfer-Encoding",
-    "Upgrade",
+
+static HOP_HEADERS: [HeaderName; 8] = [
+    HeaderName::from_static("connection"),
+    HeaderName::from_static("keep-alive"),
+    HeaderName::from_static("proxy-authenticate"),
+    HeaderName::from_static("proxy-authorization"),
+    HeaderName::from_static("te"),
+    HeaderName::from_static("trailers"),
+    HeaderName::from_static("transfer-encoding"),
+    HeaderName::from_static("upgrade"),
 ];
 
 #[inline(always)]
 fn remove_hop_headers(headers: &mut HeaderMap) {
-    for header in HOP_HEADERS {
+    for header in HOP_HEADERS.iter() {
         headers.remove(header);
     }
 }
