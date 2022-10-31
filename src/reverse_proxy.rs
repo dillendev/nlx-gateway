@@ -1,11 +1,10 @@
 use std::{
     error::Error,
     fmt::{self, Display},
-    str::FromStr,
 };
 
 use bytes::Bytes;
-use http::{uri::InvalidUri, HeaderMap, Method, Uri, header::HeaderName};
+use http::{header::HeaderName, uri::InvalidUri, HeaderMap, Method, Uri};
 use hyper::{client::connect::Connect, Body, Client};
 use warp::{
     path::Tail,
@@ -67,23 +66,49 @@ impl Request {
     }
 }
 
-fn create_proxied_request(
-    req: &Request,
-    upstream: &str,
-) -> Result<hyper::Request<Body>, Rejection> {
-    let url = format!("{}{}?{}", upstream, req.path.as_str(), req.query);
-    let url = Uri::from_str(&url).map_err(IntoRequestError::InvalidUri)?;
+fn build_uri(req: &Request, upstream: &str) -> Result<Uri, InvalidUri> {
+    let request_path = req.path.as_str();
+    let mut url = String::with_capacity(
+        upstream.len()
+            + request_path.len()
+            + if req.query.is_empty() {
+                0
+            } else {
+                req.query.len() + 1
+            },
+    );
 
-    let mut out = hyper::Request::new(req.body.clone().into());
+    url.push_str(upstream);
+    url.push_str(request_path);
 
-    *out.method_mut() = req.method.clone();
-    *out.uri_mut() = url;
+    if !req.query.is_empty() {
+        url.push('?');
+        url.push_str(&req.query);
+    }
 
-    let headers = out.headers_mut();
-    copy_headers(req.headers.clone(), headers);
+    Uri::try_from(url)
+}
+
+fn prepare_headers(req: &Request) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    copy_headers(req.headers.clone(), &mut headers);
 
     // Remove the host header as it will be set automatically
     headers.remove("host");
+    headers
+}
+
+fn create_proxied_request(
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<hyper::Request<Body>, Rejection> {
+    let mut out = hyper::Request::new(body.into());
+
+    *out.headers_mut() = headers;
+    *out.method_mut() = method;
+    *out.uri_mut() = uri;
 
     log::trace!("proxy request (request={:#?})", out);
 
@@ -104,7 +129,6 @@ impl Display for Request {
     }
 }
 
-#[inline]
 fn is_h2_goaway_no_error(e: &hyper::Error) -> bool {
     if let Some(source) = e.source() {
         if let Some(e) = source.downcast_ref::<h2::Error>() {
@@ -127,8 +151,14 @@ where
 {
     let mut retries = MAX_RETRIES;
 
+    // Prepare the request once to avoid doing more work in case of a retry
+    let uri = build_uri(&request, upstream).map_err(IntoRequestError::InvalidUri)?;
+    let headers = prepare_headers(&request);
+    let (method, body) = (request.method, request.body);
+
     loop {
-        let request = create_proxied_request(&request, upstream)?;
+        let request =
+            create_proxied_request(method.clone(), uri.clone(), headers.clone(), body.clone())?;
 
         match http.request(request).await {
             Ok(mut response) => {
